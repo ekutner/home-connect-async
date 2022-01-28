@@ -1,0 +1,5 @@
+aiohttp
+aiohttp-sse-client
+dataclasses-json
+oauth2-client
+cchardet
