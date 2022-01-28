@@ -8,7 +8,7 @@ setup(
     description = 'Async SDK for BSH Home Connect API',
     author = 'Eran Kutner',
     author_email = 'eran@kutner.org',
-    url = 'https://github.com/ekutner/homeconnect-sdk',
+    url = 'https://github.com/ekutner/home-connect-async',
     keywords = ['HomeConnect', 'Home Connect', 'BSH', 'Async', 'SDK'],
     install_requires=[
         'aiohttp',
