@@ -166,7 +166,7 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command)
-        result = await self._api.put(url, jscmd)
+        result = await self._api.async_put(url, jscmd)
 
         return result
 
@@ -180,7 +180,7 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command)
-        result = await self._api.put(url, jscmd)
+        result = await self._api.async_put(url, jscmd)
 
         return result
 
@@ -200,12 +200,15 @@ class Appliance():
             command['data']['options'] = options
 
         jscmd = json.dumps(command)
-        result = await self._api.put(url, jscmd)
+        result = await self._api.async_put(url, jscmd)
         return result
 
 
-    def connection_state(self, connected:bool):
+    async def async_set_connection_state(self, connected:bool):
         self.connected = connected
+        if connected:
+            await self.async_fetch_data(include_static_data=False)
+        await self._async_broadcast_event("CONNECTION_CHANGED", connected)
 
 
     #region - Handle Updates, Events and Callbacks
@@ -228,7 +231,7 @@ class Appliance():
                 self.settings[key].value = value
 
 
-    async def _async_on_stream_event(self, key:str, value):
+    async def _async_broadcast_event(self, key:str, value):
         # first update the local data
         await self._async_update_data(key, value)
 
@@ -246,12 +249,7 @@ class Appliance():
 
         # dispatch wildcard or value based callbacks
         for callback_record in self._wildcard_callbacks:
-            if callback_record["key"].fullmatch(key) \
-                and (
-                    callback_record["value"] is None
-                    or value==callback_record["value"]
-                    or ( isinstance(callback_record["value"], Pattern) and callback_record["value"].fullmatch(value) )
-                ):
+            if callback_record["key"].fullmatch(key):
                 callback = callback_record['callback']
                 if inspect.iscoroutinefunction(callback):
                     await callback(self, key, value)
@@ -260,8 +258,8 @@ class Appliance():
                 handled = True
 
         # dispatch default callbacks for unhandled events
-        if not handled and 'default' in self._updates_callbacks:
-            for callback in self._updates_callbacks['default']:
+        if not handled and 'DEFAULT' in self._updates_callbacks:
+            for callback in self._updates_callbacks["DEFAULT"]:
                 if inspect.iscoroutinefunction(callback):
                     await callback(self, key, value)
                 else:
@@ -269,36 +267,44 @@ class Appliance():
                 handled = True
 
 
-    def register_callback(self, callback:Callable[[Appliance, str, any], None], key:str, value=None ) -> None:
-        ''' Register a callback to be called when an update is received for the specified key and optionally value
-            Wildcard syntax is supported for the key and value, otherwise an exact match is required
-            The special key "default" may be used to catch all unhandled events
+    def register_callback(self, callback:Callable[[Appliance, str, any], None], keys:str|Sequence[str] ) -> None:
+        ''' Register a callback to be called when an update is received for the specified keys
+            Wildcard syntax is also supported for the keys
+
+            They key "CONNECTION_CHANGED" will be used when the connection state of the appliance changes
+
+            The special key "DEFAULT" may be used to catch all unhandled events
         '''
-        if key is None:
-            raise ValueError("An event key must be specified")
+        if keys is None:  raise ValueError("An event key must be specified")
+        elif not isinstance(keys, list): keys = [ keys ]
 
-        if ('*' in key) or (value is not None):
-            callback_record = {
-                "key": re.compile(fnmatch.translate(key), re.IGNORECASE),
-                "value": re.compile(fnmatch.translate(value), re.IGNORECASE) if value and isinstance(value, str) else value,
-                "callback": callback
-            }
-            self._wildcard_callbacks.append(callback_record)
-        else:
-            if key not in self._updates_callbacks:
-                self._updates_callbacks[key] = set()
-            self._updates_callbacks[key].add(callback)
+        for key in keys:
+            if '*' in key:
+                callback_record = {
+                    "key": re.compile(fnmatch.translate(key), re.IGNORECASE),
+                    "callback": callback
+                }
+                self._wildcard_callbacks.append(callback_record)
+            else:
+                if key not in self._updates_callbacks:
+                    self._updates_callbacks[key] = set()
+                self._updates_callbacks[key].add(callback)
 
-    def deregister_callback(self, callback:Callable[[], None], key:str, value=None ) -> None:
-        if '*' in key or value is not None:
-            callback_record = { "key": key, "value": value, "callback": callback}
-            try:
-                self._wildcard_callbacks.remove(callback_record)
-            except ValueError:
-                # ignore if the value is not found in the list
-                pass
-        else:
-            self._updates_callbacks[key].remove(callback)
+    def deregister_callback(self, callback:Callable[[], None], keys:str|Sequence[str]) -> None:
+        if keys is None:  raise ValueError("An event key must be specified")
+        elif not isinstance(keys, list): keys = [ keys ]
+
+        for key in keys:
+            if '*' in key:
+                callback_record = { "key": key, "callback": callback}
+                try:
+                    self._wildcard_callbacks.remove(callback_record)
+                except ValueError:
+                    # ignore if the value is not found in the list
+                    pass
+            else:
+                if key in self._updates_callbacks:
+                    self._updates_callbacks[key].remove(callback)
 
     def clear_all_callbacks(self):
         self._wildcard_callbacks = []
@@ -311,7 +317,7 @@ class Appliance():
     @classmethod
     async def async_create(cls, api:HomeConnectAPI, properties:dict=None, haId:str=None) -> Appliance:
         if haId:
-            properties = api.get(f"/api/homeappliances/{haId}")
+            properties = await api.async_get(f"/api/homeappliances/{haId}")
 
         appliance = cls(
             name = properties['name'],
@@ -324,8 +330,7 @@ class Appliance():
             uri = f"/api/homeappliances/{properties['haId']}"
         )
         appliance._api = api
-        appliance._updates_callbacks = {}
-        appliance._events_callbacks = set()
+        appliance.clear_all_callbacks()
 
         await appliance.async_fetch_data()
 
@@ -333,7 +338,7 @@ class Appliance():
 
     _base_endpoint = property(lambda self: f"/api/homeappliances/{self.haId}")
 
-    async def async_fetch_data(self, include_static_data=True):
+    async def async_fetch_data(self, include_static_data:bool=True):
         if include_static_data:
             self.available_programs = await self._async_fetch_programs('available')
         self.selected_program = await self._async_fetch_programs('selected')
@@ -343,7 +348,7 @@ class Appliance():
 
     async def _async_fetch_programs(self, type:str):
         endpoint = f'{self._base_endpoint}/programs/{type}'
-        data = await self._api.get(endpoint)
+        data = await self._api.async_get(endpoint)
         if data is None: return None
 
         programs = {}
@@ -368,7 +373,7 @@ class Appliance():
 
     async def _async_fetch_status(self):
         endpoint = f'{self._base_endpoint}/status'
-        data = await self._api.get(endpoint)
+        data = await self._api.async_get(endpoint)
         if data is None or 'status' not in data: return None
 
         res = {}
@@ -378,13 +383,13 @@ class Appliance():
 
     async def _async_fetch_settings(self):
         endpoint = f'{self._base_endpoint}/settings'
-        data = await self._api.get(endpoint)
+        data = await self._api.async_get(endpoint)
         if data is None or 'settings' not in data: return None
 
         settings = {}
         for setting in data['settings']:
             endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
-            data = await self._api.get(endpoint)
+            data = await self._api.async_get(endpoint)
             settings[setting['key']] = Option.create(data)
         return settings
 
@@ -392,7 +397,7 @@ class Appliance():
         if subkey == None:
             subkey = uri_suffix
         endpoint = f'{self._base_endpoint}/{uri_suffix}'
-        data = await self._api.get(endpoint)
+        data = await self._api.async_get(endpoint)
         if data is None or subkey not in data:
             return None
         else:

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from aioconsole import ainput
-from homeconnect import HomeConnect, AuthManager, Appliance
+from home_connect_async import HomeConnect, AuthManager, Appliance
 
 logging.basicConfig(level=logging.DEBUG)
 
