@@ -3,13 +3,17 @@ import inspect
 import json
 import logging
 import fnmatch
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Optional, Pattern
-from dataclasses_json import dataclass_json
+from urllib import response
+from dataclasses_json import dataclass_json, Undefined, config
+from marshmallow import fields
 from collections.abc import Sequence, Callable
 
-from .api import HomeConnectAPI
+from home_connect_async.common import HomeConnectError
+
+from .api import HomeConnectApi
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,7 +99,7 @@ class Program:
         return self
 
 
-@dataclass_json
+@dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class Appliance():
     name:str
@@ -112,6 +116,8 @@ class Appliance():
     status:dict[str, any] = None
     settings:dict[str, Option] = None
 
+    # Internal fields
+    _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
     #region - Manage Programs
     async def async_get_active_program(self):
@@ -156,7 +162,7 @@ class Appliance():
         if self.active_program is None:
             await self.async_get_active_program()
 
-    async def async_set_option(self, key, value):
+    async def async_set_option(self, key, value) -> bool:
         url = f'{self._base_endpoint}/programs/selected/options/{key}'
 
         command = {
@@ -166,9 +172,13 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command)
-        result = await self._api.async_put(url, jscmd)
+        response = await self._api.async_put(url, jscmd)
+        if response.status == 204:
+            return True
+        elif response.error_description:
+            raise HomeConnectError(response.error_description, response=response)
+        raise HomeConnectError("Failed to set option ({response.status})", response=response)
 
-        return result
 
     async def async_apply_setting(self, key, value):
         url = f'{self._base_endpoint}/settings/{key}'
@@ -180,9 +190,12 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command)
-        result = await self._api.async_put(url, jscmd)
-
-        return result
+        response = await self._api.async_put(url, jscmd)
+        if response.status == 204:
+            return True
+        elif response.error_description:
+            raise HomeConnectError(response.error_description, response=response)
+        raise HomeConnectError("Failed to apply setting ({response.status})", response=response)
 
 
     async def _async_set_program(self, key, options:Sequence[dict], mode:str) -> bool:
@@ -200,8 +213,13 @@ class Appliance():
             command['data']['options'] = options
 
         jscmd = json.dumps(command)
-        result = await self._api.async_put(url, jscmd)
-        return result
+        response = await self._api.async_put(url, jscmd)
+        if response.status == 204:
+            return True
+        elif response.error_description:
+            raise HomeConnectError(response.error_description, code=response.status, error_key=response.error_key, response=response)
+        raise HomeConnectError("Failed to set program ({response.status})", response=response)
+
 
 
     async def async_set_connection_state(self, connected:bool):
@@ -315,9 +333,10 @@ class Appliance():
 
     #region - Initialization and Data Loading
     @classmethod
-    async def async_create(cls, api:HomeConnectAPI, properties:dict=None, haId:str=None) -> Appliance:
+    async def async_create(cls, api:HomeConnectApi, properties:dict=None, haId:str=None) -> Appliance:
         if haId:
-            properties = await api.async_get(f"/api/homeappliances/{haId}")
+            response = await api.async_get(f"/api/homeappliances/{haId}")  # This should either work or raise an exception
+            properties = response.data
 
         appliance = cls(
             name = properties['name'],
@@ -348,8 +367,12 @@ class Appliance():
 
     async def _async_fetch_programs(self, type:str):
         endpoint = f'{self._base_endpoint}/programs/{type}'
-        data = await self._api.async_get(endpoint)
-        if data is None: return None
+        response = await self._api.async_get(endpoint)
+        if response.status == 404 or response.error_key == "SDK.Error.UnsupportedOperation":
+            return None
+        elif not response.data:
+            raise HomeConnectError(msg=f"Failed to get a valid response from the Home Connect service ({response.status})", response=response)
+        data = response.data
 
         programs = {}
         if 'programs' not in data:
@@ -373,7 +396,10 @@ class Appliance():
 
     async def _async_fetch_status(self):
         endpoint = f'{self._base_endpoint}/status'
-        data = await self._api.async_get(endpoint)
+        response = await self._api.async_get(endpoint)
+        if response.status == 409:
+            raise HomeConnectError(msg="The appliance didn't respond (409)", response=response)
+        data = response.data
         if data is None or 'status' not in data: return None
 
         res = {}
@@ -383,21 +409,27 @@ class Appliance():
 
     async def _async_fetch_settings(self):
         endpoint = f'{self._base_endpoint}/settings'
-        data = await self._api.async_get(endpoint)
+        response = await self._api.async_get(endpoint)
+        if response.status == 408:
+            raise HomeConnectError(msg="The appliance didn't respond (408)", response=response)
+        data = response.data
         if data is None or 'settings' not in data: return None
 
         settings = {}
         for setting in data['settings']:
             endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
-            data = await self._api.async_get(endpoint)
-            settings[setting['key']] = Option.create(data)
+            response = await self._api.async_get(endpoint)
+            if response.status != 200:
+                continue
+            settings[setting['key']] = Option.create(response.data)
         return settings
 
     async def _async_fetch_options(self, uri_suffix, subkey=None):
         if subkey == None:
             subkey = uri_suffix
         endpoint = f'{self._base_endpoint}/{uri_suffix}'
-        data = await self._api.async_get(endpoint)
+        response = await self._api.async_get(endpoint)      # This is expected to always succeed if the previous call succeeds
+        data = response.data
         if data is None or subkey not in data:
             return None
         else:

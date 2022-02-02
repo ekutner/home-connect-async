@@ -1,20 +1,23 @@
 from __future__ import annotations
 import asyncio
+from asyncio import Task
 from enum import Enum, IntFlag
 import inspect
 import logging
 import json
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Optional, Sequence
 from dataclasses_json import dataclass_json, Undefined, config
 from marshmallow import fields
 from datetime import datetime
 from collections.abc import Callable
 
 from aiohttp_sse_client.client import MessageEvent
+
+from home_connect_async.common import HomeConnectError
 from .appliance import Appliance
 from .auth import AuthManager
-from .api import HomeConnectAPI
+from .api import HomeConnectApi
 from .const import *
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +52,11 @@ class HomeConnect:
             )
         )
 
+    # Internal fields - not serialized to JSON
+    _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _updates_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _load_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _callbacks:dict = field(default_factory=dict, metadata=config(exclude=lambda val: True))
 
     @classmethod
     async def async_create(cls, am:AuthManager, json_data:str=None, delayed_load:bool=False, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, auto_update:bool=False) -> HomeConnect:
@@ -65,25 +73,30 @@ class HomeConnect:
 
         If auto_update is set to False then subscribe_for_updates() should be called to receive real-time updates to the data
         """
-        api = HomeConnectAPI(am)
-        if json_data:
-            hc:HomeConnect = HomeConnect.from_json(json_data)
-            # manually initialize the appliances because they were created from json
-            for appliance in hc.appliances.values():
-                appliance._api = api
-                appliance.clear_all_callbacks()
-        else:
-            hc = HomeConnect()
-        hc._api = api
-        hc._refresh_mode = refresh
+        try:
+            api = HomeConnectApi(am)
+            if json_data:
+                hc:HomeConnect = HomeConnect.from_json(json_data)
+                # manually initialize the appliances because they were created from json
+                for appliance in hc.appliances.values():
+                    appliance._api = api
+                    appliance.clear_all_callbacks()
+            else:
+                hc = HomeConnect()
+            hc._api = api
+            hc._refresh_mode = refresh
 
-        if not delayed_load:
-            await hc._async_load_data(refresh)
+            if not delayed_load:
+                await hc._async_load_data(refresh)
 
-        if auto_update and not delayed_load:
-            hc.subscribe_for_updates()
+            if auto_update and not delayed_load:
+                hc.subscribe_for_updates()
 
-        return hc
+            return hc
+        except Exception as ex:
+            _LOGGER.exception("Exception when creating HomeConnect object", exc_info=ex)
+
+        return None
 
     def continue_data_load(self, refresh:RefreshMode = None, on_complete:Callable[[HomeConnect], None] = None) -> asyncio.Task:
         """Complete the loading of the data when using delayed load
@@ -106,9 +119,10 @@ class HomeConnect:
                 await self._broadcast_event(appliance, "PAIRED")
 
         else:
-            data = await self._api.async_get('/api/homeappliances')
-            if data is None:
-                raise ConnectionError("Failed to read data from Home Connect API")
+            response = await self._api.async_get('/api/homeappliances')
+            if response.status != 200:
+                raise HomeConnectError(f"Failed to get a valid response from the Home Connect server ({response.status})", response=response)
+            data = response.data
 
             haid_list = []
             if 'homeappliances' in data:
@@ -143,8 +157,6 @@ class HomeConnect:
 
         close() must be called before the HomeConnect object is terminated to cleanly close the updates channel
         """
-        if not hasattr(self, "_updates_task"):
-            self._updates_task = None
         if not self._updates_task:
             #self._updates_task = asyncio.create_task(self._api.stream('/api/homeappliances/events', message_handler=self._async_process_updates), name="subscribe_for_updates")
             self._updates_task = asyncio.create_task(self.async_events_stream(), name="subscribe_for_updates")
@@ -156,11 +168,11 @@ class HomeConnect:
 
         This method must be called if updates subscription was requested
         """
-        if hasattr(self, "_load_task") and self._load_task and not self._load_task.cancelled():
+        if self._load_task and not self._load_task.cancelled():
             self._load_task.cancel()
             self._load_task = None
 
-        if  hasattr(self, "_updates_task") and self._updates_task and not self._updates_task.cancelled():
+        if  self._updates_task and not self._updates_task.cancelled():
             self._updates_task.cancel()
             self._updates_task = None
 
@@ -230,7 +242,7 @@ class HomeConnect:
 
             except asyncio.TimeoutError:
                 # it is expected that the connection will time out every hour
-                _LOGGER.debug("The SSE connection timeout, will renew and retry")
+                _LOGGER.debug("The SSE connection timeed-out, will renew and retry")
             except Exception as ex:
                 self.status &= self.HomeConnectStatus.NOUPDATES
                 _LOGGER.exception('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
@@ -280,9 +292,6 @@ class HomeConnect:
         if not isinstance(keys, list):
             keys = [ keys ]
 
-        if not hasattr(self, "_callbacks"):
-            self._callbacks = {}
-
         for key in keys:
             if key not in self._callbacks:
                 self._callbacks[key] = set()
@@ -294,9 +303,6 @@ class HomeConnect:
 
 
     async def _broadcast_event(self, appliance:Appliance, event:str):
-        if not hasattr(self, "_callbacks"):
-            self._callbacks = {}
-
         callbacks = self._callbacks.get(event)
 
         if callbacks:

@@ -1,61 +1,90 @@
+from __future__ import annotations
+from dataclasses import dataclass
 import logging
 import asyncio
 from collections.abc import Callable
+from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
+from .common import HomeConnectError
 from .const import *
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class HomeConnectAPI():
+class HomeConnectApi():
+
+    @dataclass
+    class ApiResponse():
+        response:ClientResponse
+        status:int
+        json:str
+        data:any
+        error:any
+
+        def __init__(self, response:ClientResponse, json_body):
+            self.response = response
+            self.status = response.status
+            self.json_body = json_body
+            self.data = json_body['data'] if json_body and 'data' in json_body else None
+            self.error = json_body['error'] if json_body and 'error' in json_body else None
+
+        @property
+        def error_key(self) -> str | None:
+            if self.error and "key" in self.error:
+                return self.error["key"]
+            return None
+
+        @property
+        def error_description(self) -> str | None:
+            if self.error and "description" in self.error:
+                return self.error["description"]
+            return None
+
 
     def __init__(self, auth:AbstractAuth):
         self._auth = auth
 
-    async def _async_request(self, method, endpoint, data=None):
+
+    async def _async_request(self, method, endpoint, data=None) -> ApiResponse:
         retry = 3
         response = None
         while retry:
             try:
                 response = await self._auth.request(method, endpoint, data=data)
-                if method=='get' and response.status == 200:
-                    json_body = await response.json()
-                    return json_body['data']
-                elif response.status == 204:
-                    return True
-                elif response.status == 429:    # Too Many Requests
+                if response.status == 429:    # Too Many Requests
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
                     await asyncio.sleep(int(wait_time)+1)
-                elif method=='get' and response.status in [404, 409]:
-                    # This is expected because some appliances don't have active programs or programs at all
-                    return None
-                elif response.status == 401: # Unauthorized
+                elif response.status == 401 or response.status >= 500: # Unauthorized
                     # This is probably caused by an expires token so the next retry will get a new one automatically
                     pass
+                elif not response.content_length:
+                    result = self.ApiResponse(response, None)
+                    return result
                 else:
-                    _LOGGER.info('HTTP Error %d when calling %s : %s ', response.status, response.url, await response.text())
-                    return None
+                    result = self.ApiResponse(response, await response.json())
+                    return result
             except Exception as ex:
-                _LOGGER.exception("Unexpected exeption when calling HomeConnect service", exc_info=ex)
+                _LOGGER.debug("Unexpected exeption when calling HomeConnect service", exc_info=ex)
+                if not retry: raise HomeConnectError("Unexpected exception when calling HomeConnect service", code=901, inner_exception=ex)
             finally:
                 if response:
                     response.close()
                     response = None
             retry -= 1
-        _LOGGER.error('Failed to get a valid response after 3 retries')
-        return None
+
+        # all retries were exhausted without a valid response
+        raise HomeConnectError("Failed to get a valid response from Home Connect server", 902)
 
 
-    async def async_get(self, endpoint, lang='en-GB'):
+    async def async_get(self, endpoint, lang='en-GB') -> ApiResponse:
         return await self._async_request('get', endpoint)
 
-    async def async_put(self, endpoint:str, data:str, lang='en-GB') -> bool:
+    async def async_put(self, endpoint:str, data:str, lang='en-GB') -> ApiResponse:
         return await self._async_request('put', endpoint, data=data)
 
-
-    async def async_delete(self, endpoint:str) -> bool:
+    async def async_delete(self, endpoint:str) -> ApiResponse:
         return await self._async_request('delete', endpoint)
 
     async def async_get_event_stream(self, endpoint):
