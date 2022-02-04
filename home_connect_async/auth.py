@@ -1,23 +1,22 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-import imp
+from datetime import datetime, timedelta
+from typing import Optional
 import webbrowser
 import logging
-import asyncio
-from wsgiref import headers
 import aiohttp
 from aiohttp import ClientSession, ClientResponse
 from aiohttp_sse_client import client as sse_client
 from oauth2_client.credentials_manager import CredentialManager, ServiceInformation
-from datetime import datetime, timedelta
 
-from .const import *
+
+from .const import SIM_HOST, API_HOST, DEFAULT_SCOPES, ENDPOINT_AUTHORIZE, ENDPOINT_TOKEN
 
 _LOGGER = logging.getLogger(__name__)
 
 # This is for compatability with Home Assistant
 class AbstractAuth(ABC):
-    """Abstract class to make authenticated requests."""
+    """Abstract class to make authenticated requests. This is a pattern required by Home Assistant """
 
     def __init__(self, websession: ClientSession, host: str):
         """Initialize the auth."""
@@ -48,39 +47,8 @@ class AbstractAuth(ABC):
             method, f"{self.host}{endpoint}", **kwargs, headers=headers,
         )
 
-    async def stream(self, endpoint:str, message_handler=None, **kwargs) -> sse_client.EventSource:
-        # headers = {}
-        # backoff = 2
-        # while True:
-        #     try:
-        #         access_token = await self.async_get_access_token()
-        #         headers['authorization'] = f'Bearer {access_token}'
-        #         headers['Accept'] = 'application/vnd.bsh.sdk.v1+json'
-        #         headers['Accept-Language'] = 'en-GB'
-
-        #         #timeout = aiohttp.ClientTimeout(total = ( self._auth.access_token_expirs_at - datetime.now() ).total_seconds() )
-        #         timeout = aiohttp.ClientTimeout(total = timedelta(seconds=3600) )
-        #         async with sse_client.EventSource(endpoint, session=self.websession, timeout=timeout) as event_source:
-        #             async for event in event_source:
-        #                 backoff = 2
-        #                 try:
-        #                     await on_message_handler(event)
-        #                 except Exception as ex:
-        #                     _LOGGER.exception('Unhandled exception in event handler', exc_info=ex)
-        #     except asyncio.CancelledError:
-        #         break
-        #     except ConnectionRefusedError as ex:
-        #         _LOGGER.exception('ConnectionRefusedError in SSE connection refused. Will try again', exc_info=ex)
-        #     except ConnectionError as ex:
-        #         _LOGGER.exception('ConnectionError in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
-        #         await asyncio.sleep(backoff)
-        #         if backoff < 120:
-        #             backoff *= 2
-        #     except Exception as ex:
-        #         _LOGGER.exception('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
-        #         await asyncio.sleep(backoff)
-        #         if backoff < 120:
-        #             backoff *= 2
+    async def stream(self, endpoint:str, **kwargs) -> sse_client.EventSource:
+        """ Initiate a SSE stream """
         headers = {}
         access_token = await self.async_get_access_token()
         headers['authorization'] = f'Bearer {access_token}'
@@ -88,11 +56,11 @@ class AbstractAuth(ABC):
         headers['Accept-Language'] = 'en-GB'
         #timeout = aiohttp.ClientTimeout(total = ( self._auth.access_token_expirs_at - datetime.now() ).total_seconds() )
         timeout = aiohttp.ClientTimeout(total = 3600 )
-        return sse_client.EventSource(f"{self.host}{endpoint}", session=self.websession, headers=headers, timeout=timeout)
+        return sse_client.EventSource(f"{self.host}{endpoint}", session=self.websession, headers=headers, timeout=timeout, **kwargs)
 
 
 class AuthManager(AbstractAuth):
-
+    """ Class the implements a full fledged authentication manager when the SDK is not being used by Home Assistant """
     def __init__(self, client_id, client_secret, scopes=None, simulate=False):
         host = SIM_HOST if simulate else API_HOST
         session = ClientSession()
@@ -108,16 +76,20 @@ class AuthManager(AbstractAuth):
         )
         self._cm = HomeConnectCredentialsManager(service_information)
 
-    async def async_get_access_token(self) -> str:
-        return self.get_access_token()
-
     def renew_token(self):
+        """ Renews the access token using the stored refresh token """
         self._cm.init_with_token(self.refresh_token)
 
     def get_access_token(self):
+        """ Gets an access token """
         if self._cm.access_token_expirs_at and datetime.now() > self._cm.access_token_expirs_at:
             self.renew_token()
         return self._cm._access_token
+
+    async def async_get_access_token(self) -> str:
+        """ Gets an access token """
+        return self.get_access_token()
+
 
     access_token = property(get_access_token)
     access_token_expirs_at = property(lambda self: self._cm.access_token_expirs_at)
@@ -127,6 +99,7 @@ class AuthManager(AbstractAuth):
     )
 
     def login(self, redirect_url:str=None):
+        """ Login to the Home Connect service using the code flow of OAuth 2 """
         if redirect_url is None:
             redirect_url = 'http://localhost:7878/auth'
 
@@ -141,12 +114,22 @@ class AuthManager(AbstractAuth):
         _LOGGER.debug('Access got = %s', self.access_token)
 
     async def close(self):
+        """ Close the authentication manager when it is no longer in use """
         await self.websession.close()
 
 
 # Extend the CredentialManager class so we can capture the token expiration time
 class HomeConnectCredentialsManager(CredentialManager):
+    """ Extend the oauth2_client library CredentialManager to handle and store the received token """
+
+    def __init__(self, service_information: ServiceInformation, proxies: Optional[dict] = None):
+        super().__init__(service_information, proxies)
+        self._raw_token = None
+        self.access_token_expirs_at = None
+        self.id_token = None
+
     def _process_token_response(self, token_response: dict, refresh_token_mandatory: bool):
+        """ Override the parent's method to handle the extra data we care about """
         self._raw_token = token_response
         if 'expires_in' in token_response:
             self.access_token_expirs_at = datetime.now() + timedelta(seconds=token_response['expires_in'])

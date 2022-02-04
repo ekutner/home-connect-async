@@ -5,42 +5,50 @@ from enum import Enum, IntFlag
 import inspect
 import logging
 import json
-from dataclasses import dataclass, field
-from typing import Optional, Sequence
-from dataclasses_json import dataclass_json, Undefined, config
-from marshmallow import fields
+from typing import ClassVar, Optional, Sequence
 from datetime import datetime
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from dataclasses_json import Undefined, config, DataClassJsonMixin
+from marshmallow import fields
+
 
 from aiohttp_sse_client.client import MessageEvent
 
-from home_connect_async.common import HomeConnectError
+from .common import HomeConnectError
 from .appliance import Appliance
 from .auth import AuthManager
 from .api import HomeConnectApi
-from .const import *
 
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass_json(undefined=Undefined.EXCLUDE)
+#@dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
-class HomeConnect:
+class HomeConnect(DataClassJsonMixin):
+    """ The main class that wraps the whole data model,
+    coordinates the loading of data from the cloud service and listens for update events
+    """
     class HomeConnectStatus(IntFlag):
-        INIT = 0,
-        LOADING = 1,
-        LOADED = 3,
-        UPDATES = 4,
-        NOUPDATES = ~4,
+        """ Enum for the current status of the Home Connect data loading process """
+        INIT = 0
+        LOADING = 1
+        LOADED = 3
+        UPDATES = 4
+        NOUPDATES = ~4
         READY = 7
 
     class RefreshMode(Enum):
-        NOTHING = 0,
-        VALIDATE = 1,
-        DYNAMIC_ONLY = 2,
+        """ Enum for the supported data refresh modes """
+        NOTHING = 0
+        VALIDATE = 1
+        DYNAMIC_ONLY = 2
         ALL = 3
 
+    # This is a class variable used as configuration for the dataclass_json
+    dataclass_json_config:ClassVar[config] = config(undefined=Undefined.EXCLUDE)
 
+    # The data calss fields
     appliances:dict[str, Appliance] = field(default_factory=dict)
     status:HomeConnect.HomeConnectStatus = \
         field(
@@ -52,6 +60,7 @@ class HomeConnect:
             )
         )
 
+
     # Internal fields - not serialized to JSON
     _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _updates_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
@@ -60,7 +69,7 @@ class HomeConnect:
 
     @classmethod
     async def async_create(cls, am:AuthManager, json_data:str=None, delayed_load:bool=False, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, auto_update:bool=False) -> HomeConnect:
-        """ Create a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
+        """ Factory for creating a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
 
         Parameters:
         * json_data - A JSON string of cached data model data obtained by calling .to_json() on a previously loaded HomeConnect object
@@ -76,7 +85,7 @@ class HomeConnect:
         try:
             api = HomeConnectApi(am)
             if json_data:
-                hc:HomeConnect = HomeConnect.from_json(json_data)
+                hc:HomeConnect = HomeConnect.from_json(json_data)   # This mehod is added by dataclass_json but it's not detected by pylint
                 # manually initialize the appliances because they were created from json
                 for appliance in hc.appliances.values():
                     appliance._api = api
@@ -112,6 +121,7 @@ class HomeConnect:
         return self._load_task
 
     async def _async_load_data(self, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, on_complete:Callable[[HomeConnect], None] = None) -> None:
+        """ Loads or just refreshes the data model from the cloud service """
         self.status |= self.HomeConnectStatus.LOADING
 
         if refresh == self.RefreshMode.NOTHING:
@@ -183,20 +193,15 @@ class HomeConnect:
 
 
     def __getitem__(self, haId) -> Appliance:
+        """ Supports simple access to an appliance based on its haId """
         self.appliances.get(haId)
-
-    def _get_haId_from_event(self, event:dict):
-        uri_parts = event['uri'].split('/')
-        assert(uri_parts[0]=='')
-        assert(uri_parts[1]=='api')
-        assert(uri_parts[2]=='homeappliances')
-        haId = uri_parts[3]
-        return haId
 
 
     #region - Event stream and updates
 
     async def async_events_stream(self):
+        """ Open the SSE channel, process the incoming events and handle errors """
+
         def parse_sse_error(error:str) -> int:
             try:
                 parts = error.split(': ')
@@ -257,6 +262,7 @@ class HomeConnect:
 
 
     async def _async_process_updates(self, event:MessageEvent):
+        """ Handle the different kinds of events received over the SSE channel """
         haId = event.last_event_id
         if event.type == 'KEEP-ALIVE':
             self._last_update = datetime.now()
@@ -288,7 +294,23 @@ class HomeConnect:
                         await self.appliances[haId]._async_broadcast_event(item['key'], item['value'])
 
 
+    def _get_haId_from_event(self, event:dict):
+        """ Parse the uri field that exists in some streamed events to extract the haID
+        This seems safer than relying on the last_event_id field so preferred when it's available
+        """
+        uri_parts = event['uri'].split('/')
+        assert(uri_parts[0]=='')
+        assert(uri_parts[1]=='api')
+        assert(uri_parts[2]=='homeappliances')
+        haId = uri_parts[3]
+        return haId
+
+
     def register_callback(self, callback:Callable[[Appliance, str], None], keys:str|Sequence[str]):
+        """ Register for global events
+
+        Use the Appliance.register_callback() to register for appliance data update events
+        """
         if not isinstance(keys, list):
             keys = [ keys ]
 
@@ -299,10 +321,12 @@ class HomeConnect:
 
 
     def clear_all_callbacks(self):
+        """ Clear all the registered callbacks """
         self._callbacks = {}
 
 
     async def _broadcast_event(self, appliance:Appliance, event:str):
+        """ Broadcast an event to all subscribed callbacks """
         callbacks = self._callbacks.get(event)
 
         if callbacks:

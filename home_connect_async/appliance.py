@@ -5,14 +5,11 @@ import logging
 import fnmatch
 from dataclasses import dataclass, field
 import re
-from typing import Optional, Pattern
-from urllib import response
+from typing import Optional
 from dataclasses_json import dataclass_json, Undefined, config
-from marshmallow import fields
 from collections.abc import Sequence, Callable
 
-from home_connect_async.common import HomeConnectError
-
+from .common import HomeConnectError
 from .api import HomeConnectApi
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass_json
 @dataclass
 class Option:
+    """ Class to represent a Home Connect Option """
     key:str
     type:Optional[str]
     name:Optional[str]
@@ -31,7 +29,8 @@ class Option:
     allowedvalues:Optional[list[str]] = None
 
     @classmethod
-    def create(self, data:dict):
+    def create(cls, data:dict):
+        """ A factory to create a new instance from a dictionary in the Home COnnect format """
         option = Option(
             key = data['key'],
             type = data.get('type'),
@@ -48,6 +47,7 @@ class Option:
         return option
 
     def get_option_to_apply(self, value, exception_on_error=False):
+        """ Construct an option dict that can be sent to the Home Connect API """
         def value_error():
             if exception_on_error:
                 raise ValueError(f'Invalid value for this option: {value}')
@@ -73,6 +73,8 @@ class Option:
 @dataclass_json
 @dataclass
 class Program:
+    """ Class to represent a Home Connect Program """
+
     key:str
     name:Optional[str] = None
     options:dict[str, Option] = None
@@ -81,6 +83,7 @@ class Program:
 
     @classmethod
     def create(cls, data:dict):
+        """ A factory to create a new instance from a dict in the Home Connect format """
         program = cls(data['key'])
         program._update(data)
         return program
@@ -102,6 +105,7 @@ class Program:
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class Appliance():
+    """ Class to represent a Home Connect Appliance """
     name:str
     brand:str
     vib:str
@@ -118,19 +122,30 @@ class Appliance():
 
     # Internal fields
     _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _wildcard_callbacks:Optional[Sequence[str]] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _updates_callbacks:Optional[dict[str, Callable[[Appliance, str, any], None]]] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
     #region - Manage Programs
     async def async_get_active_program(self):
+        """ Get the active program """
         prog = await self._async_fetch_programs('active')
         self.active_program = prog
         return prog
 
     async def async_get_selected_program(self):
+        """ Get the selected program """
         prog = await self._async_fetch_programs('selected')
         self.selected_program = prog
         return prog
 
     async def async_select_program(self, key:str=None, options:Sequence[dict]=None, program:Program=None) -> bool:
+        """ Set the selected program
+
+        Parameters:
+        key: The key of the program to select
+        options: Additional program options to set
+        program: A Program object that represents the selected program. If used then "key" is ignored.
+        """
         if program is not None:
             key = program.key
 
@@ -141,6 +156,13 @@ class Appliance():
         return await self._async_set_program(key, options, 'selected')
 
     async def async_start_program(self, key:str=None, options:Sequence[dict]=None, program:Program=None) -> bool:
+        """ Started the specified program
+
+        Parameters:
+        key: The key of the program to select
+        options: Additional program options to set
+        program: A Program object that represents the selected program. If used then "key" is ignored.
+        """
         if program is not None:
             key = program.key
 
@@ -158,11 +180,21 @@ class Appliance():
 
         return await self._async_set_program(key, options, 'active')
 
-    async def async_stop_active_program(self):
+    async def async_stop_active_program(self) -> bool:
+        """ Stop the active program """
         if self.active_program is None:
             await self.async_get_active_program()
+        if self.active_program:
+            response = await self._api.async_delete(f'{self._base_endpoint}/programs/active')
+            if response.status == 204:
+                return True
+            elif response.error_description:
+                raise HomeConnectError(response.error_description, response=response)
+            raise HomeConnectError("Failed to stop the program ({response.status})", response=response)
+        return False
 
     async def async_set_option(self, key, value) -> bool:
+        """ Set a value for a specific program option """
         url = f'{self._base_endpoint}/programs/selected/options/{key}'
 
         command = {
@@ -181,6 +213,7 @@ class Appliance():
 
 
     async def async_apply_setting(self, key, value):
+        """ Apply a global appliance setting """
         url = f'{self._base_endpoint}/settings/{key}'
 
         command = {
@@ -199,6 +232,7 @@ class Appliance():
 
 
     async def _async_set_program(self, key, options:Sequence[dict], mode:str) -> bool:
+        """ Main function to handle all scenarions of setting a program """
         url = f'{self._base_endpoint}/programs/{mode}'
         if options is not None and not isinstance(options, list):
             options = [ options ]
@@ -217,12 +251,13 @@ class Appliance():
         if response.status == 204:
             return True
         elif response.error_description:
-            raise HomeConnectError(response.error_description, code=response.status, error_key=response.error_key, response=response)
+            raise HomeConnectError(response.error_description, response=response)
         raise HomeConnectError("Failed to set program ({response.status})", response=response)
 
 
 
     async def async_set_connection_state(self, connected:bool):
+        """ Update the appliance connection state when notified about a state change from the event stream """
         self.connected = connected
         if connected:
             await self.async_fetch_data(include_static_data=False)
@@ -232,6 +267,7 @@ class Appliance():
     #region - Handle Updates, Events and Callbacks
 
     async def _async_update_data(self, key:str, value) -> None:
+        """ Read or update the object's data structure with data from the cloud service """
         if key == 'BSH.Common.Root.SelectedProgram':
             self.selected_program = await self._async_fetch_programs('selected')
         elif key == 'BSH.Common.Root.ActiveProgram':
@@ -250,6 +286,7 @@ class Appliance():
 
 
     async def _async_broadcast_event(self, key:str, value):
+        """ Broadcast an event to all subscribed callbacks """
         # first update the local data
         await self._async_update_data(key, value)
 
@@ -286,13 +323,13 @@ class Appliance():
 
 
     def register_callback(self, callback:Callable[[Appliance, str, any], None], keys:str|Sequence[str] ) -> None:
-        ''' Register a callback to be called when an update is received for the specified keys
+        """ Register a callback to be called when an update is received for the specified keys
             Wildcard syntax is also supported for the keys
 
             They key "CONNECTION_CHANGED" will be used when the connection state of the appliance changes
 
             The special key "DEFAULT" may be used to catch all unhandled events
-        '''
+        """
         if keys is None:  raise ValueError("An event key must be specified")
         elif not isinstance(keys, list): keys = [ keys ]
 
@@ -309,6 +346,7 @@ class Appliance():
                 self._updates_callbacks[key].add(callback)
 
     def deregister_callback(self, callback:Callable[[], None], keys:str|Sequence[str]) -> None:
+        """ Clear a callback that was prevesiously registered so it stops getting notifications """
         if keys is None:  raise ValueError("An event key must be specified")
         elif not isinstance(keys, list): keys = [ keys ]
 
@@ -325,6 +363,7 @@ class Appliance():
                     self._updates_callbacks[key].remove(callback)
 
     def clear_all_callbacks(self):
+        """ Clear all the registered callbacks """
         self._wildcard_callbacks = []
         self._updates_callbacks = {}
 
@@ -334,6 +373,7 @@ class Appliance():
     #region - Initialization and Data Loading
     @classmethod
     async def async_create(cls, api:HomeConnectApi, properties:dict=None, haId:str=None) -> Appliance:
+        """ A factory to create an instance of the class """
         if haId:
             response = await api.async_get(f"/api/homeappliances/{haId}")  # This should either work or raise an exception
             properties = response.data
@@ -358,6 +398,7 @@ class Appliance():
     _base_endpoint = property(lambda self: f"/api/homeappliances/{self.haId}")
 
     async def async_fetch_data(self, include_static_data:bool=True):
+        """ Load the appliance data from the cloud service """
         if include_static_data:
             self.available_programs = await self._async_fetch_programs('available')
         self.selected_program = await self._async_fetch_programs('selected')
@@ -365,8 +406,9 @@ class Appliance():
         self.settings = await self._async_fetch_settings()
         self.status = await self._async_fetch_status()
 
-    async def _async_fetch_programs(self, type:str):
-        endpoint = f'{self._base_endpoint}/programs/{type}'
+    async def _async_fetch_programs(self, kind:str):
+        """ Main function to fetch the different kinds of programs with their options from the cloud service """
+        endpoint = f'{self._base_endpoint}/programs/{kind}'
         response = await self._api.async_get(endpoint)
         if response.status == 404 or response.error_key == "SDK.Error.UnsupportedOperation":
             return None
@@ -384,17 +426,18 @@ class Appliance():
             if 'options' in p:
                 options = self.optionlist_to_dict(p['options'])
             else:
-                options = await self._async_fetch_options(f"programs/{type}/{p['key']}", "options")
+                options = await self._async_fetch_options(f"programs/{kind}/{p['key']}", "options")
             prog.options = options
 
             programs[p['key']] = prog
 
-        if type in ['selected', 'active'] and len(programs)==1:
+        if kind in ['selected', 'active'] and len(programs)==1:
             return list(programs.values())[0]
         else:
             return programs
 
     async def _async_fetch_status(self):
+        """ Fetch the appliance status values """
         endpoint = f'{self._base_endpoint}/status'
         response = await self._api.async_get(endpoint)
         if response.status == 409:
@@ -408,6 +451,7 @@ class Appliance():
         return res
 
     async def _async_fetch_settings(self):
+        """ Fetch the appliance settings """
         endpoint = f'{self._base_endpoint}/settings'
         response = await self._api.async_get(endpoint)
         if response.status == 408:
@@ -425,6 +469,7 @@ class Appliance():
         return settings
 
     async def _async_fetch_options(self, uri_suffix, subkey=None):
+        """ Helper function to fetch detailed options of a program """
         if subkey == None:
             subkey = uri_suffix
         endpoint = f'{self._base_endpoint}/{uri_suffix}'

@@ -1,6 +1,8 @@
+""" Common classes shared across the code """
 
 class HomeConnectError(Exception):
-    def __init__(self, msg:str=None, code:int=None, response=None, inner_exception=None):
+    """ Common exception class for the SDK """
+    def __init__(self, msg:str = None, code:int = None, response = None, inner_exception = None):
         self.msg = msg
         self.code = code
         self.response = response

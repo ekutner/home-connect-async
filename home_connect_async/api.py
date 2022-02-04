@@ -13,9 +13,10 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class HomeConnectApi():
-
+    """ A class that provides basic API calling facilities to the Home Connect API """
     @dataclass
     class ApiResponse():
+        """ Class to encapsulate a service response """
         response:ClientResponse
         status:int
         json:str
@@ -31,12 +32,14 @@ class HomeConnectApi():
 
         @property
         def error_key(self) -> str | None:
+            """ Dynamically extract the error key from the response """
             if self.error and "key" in self.error:
                 return self.error["key"]
             return None
 
         @property
         def error_description(self) -> str | None:
+            """ Dynamically extract the error description from the response """
             if self.error and "description" in self.error:
                 return self.error["description"]
             return None
@@ -47,6 +50,7 @@ class HomeConnectApi():
 
 
     async def _async_request(self, method, endpoint, data=None) -> ApiResponse:
+        """ Main function to call the Home Connect API over HTTPS """
         retry = 3
         response = None
         while retry:
@@ -67,7 +71,8 @@ class HomeConnectApi():
                     return result
             except Exception as ex:
                 _LOGGER.debug("Unexpected exeption when calling HomeConnect service", exc_info=ex)
-                if not retry: raise HomeConnectError("Unexpected exception when calling HomeConnect service", code=901, inner_exception=ex)
+                if not retry:
+                    raise HomeConnectError("Unexpected exception when calling HomeConnect service", code=901, inner_exception=ex) from ex
             finally:
                 if response:
                     response.close()
@@ -79,19 +84,24 @@ class HomeConnectApi():
 
 
     async def async_get(self, endpoint, lang='en-GB') -> ApiResponse:
+        """ Implements a HTTP GET request """
         return await self._async_request('get', endpoint)
 
     async def async_put(self, endpoint:str, data:str, lang='en-GB') -> ApiResponse:
+        """ Implements a HTTP PUT request """
         return await self._async_request('put', endpoint, data=data)
 
     async def async_delete(self, endpoint:str) -> ApiResponse:
+        """ Implements a HTTP DELETE request """
         return await self._async_request('delete', endpoint)
 
     async def async_get_event_stream(self, endpoint):
+        """ Returns a Server Sent Events (SSE) stream to be consumed by the caller """
         return await self._auth.stream(endpoint)
 
 
     async def async_stream(self, endpoint:str, event_handler:Callable[[str], None]):
+        """ Implements a SSE consumer which calls the defined event handler on every new event"""
         backoff = 2
         event_source = None
         while True:
@@ -125,7 +135,6 @@ class HomeConnectApi():
             except asyncio.TimeoutError:
                 # it is expected that the connection will time out every hour
                 _LOGGER.debug("The SSE connection timeout, will renew and retry")
-                pass
             except Exception as ex:
                 _LOGGER.exception('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
                 await asyncio.sleep(backoff)
@@ -139,6 +148,7 @@ class HomeConnectApi():
 
 
     def parse_sse_error(self, error:str) -> int:
+        """ Helper function to parse the error code from a SSE exception """
         try:
             parts = error.split(': ')
             error_code = int(parts[-1])
