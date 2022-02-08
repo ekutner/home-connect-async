@@ -6,7 +6,7 @@ from collections.abc import Callable
 from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
-from .common import HomeConnectError
+from .common import HomeConnectError, DeviceOfflineError
 from .const import *
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +68,8 @@ class HomeConnectApi():
                     return result
                 else:
                     result = self.ApiResponse(response, await response.json())
+                    if result.error_key == "SDK.Error.HomeAppliance.Connection.Initialization.Failed":
+                        raise DeviceOfflineError(result.error_description, response=result)
                     return result
             except Exception as ex:
                 _LOGGER.debug("Unexpected exeption when calling HomeConnect service", exc_info=ex)

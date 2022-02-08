@@ -10,12 +10,11 @@ from datetime import datetime
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from dataclasses_json import Undefined, config, DataClassJsonMixin
-from marshmallow import fields
-
 
 from aiohttp_sse_client.client import MessageEvent
 
 from .common import HomeConnectError
+from .callback_registery import CallbackRegistry
 from .appliance import Appliance
 from .auth import AuthManager
 from .api import HomeConnectApi
@@ -37,6 +36,8 @@ class HomeConnect(DataClassJsonMixin):
         UPDATES = 4
         NOUPDATES = ~4
         READY = 7
+        LOADING_FAILED = 8
+
 
     class RefreshMode(Enum):
         """ Enum for the supported data refresh modes """
@@ -44,6 +45,7 @@ class HomeConnect(DataClassJsonMixin):
         VALIDATE = 1
         DYNAMIC_ONLY = 2
         ALL = 3
+
 
     # This is a class variable used as configuration for the dataclass_json
     dataclass_json_config:ClassVar[config] = config(undefined=Undefined.EXCLUDE)
@@ -53,11 +55,7 @@ class HomeConnect(DataClassJsonMixin):
     status:HomeConnect.HomeConnectStatus = \
         field(
             default=HomeConnectStatus.INIT,
-            metadata=config(
-                encoder=lambda val: val.name,
-                decoder=lambda val: HomeConnect.HomeConnectStatus.INIT,
-                mm_field=fields.String()
-            )
+            metadata=config(encoder = lambda val: val.name, exclude = lambda val: True)
         )
 
 
@@ -65,7 +63,7 @@ class HomeConnect(DataClassJsonMixin):
     _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _updates_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _load_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
-    _callbacks:dict = field(default_factory=dict, metadata=config(exclude=lambda val: True))
+    _callbacks:Optional[CallbackRegistry] = field(default_factory=lambda: CallbackRegistry(), metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
     @classmethod
     async def async_create(cls, am:AuthManager, json_data:str=None, delayed_load:bool=False, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, auto_update:bool=False) -> HomeConnect:
@@ -82,32 +80,33 @@ class HomeConnect(DataClassJsonMixin):
 
         If auto_update is set to False then subscribe_for_updates() should be called to receive real-time updates to the data
         """
-        try:
-            api = HomeConnectApi(am)
-            if json_data:
-                hc:HomeConnect = HomeConnect.from_json(json_data)   # This mehod is added by dataclass_json but it's not detected by pylint
+        api = HomeConnectApi(am)
+        hc:HomeConnect = None
+        if json_data:
+            try:
+                hc = HomeConnect.from_json(json_data)
+                hc.status = cls.HomeConnectStatus.INIT
                 # manually initialize the appliances because they were created from json
                 for appliance in hc.appliances.values():
-                    appliance._api = api
-                    appliance.clear_all_callbacks()
-            else:
-                hc = HomeConnect()
-            hc._api = api
-            hc._refresh_mode = refresh
+                    appliance._homeconnect = hc
+            except Exception as ex:
+                _LOGGER.exception("Exception when loading HomeConnect data from JSON", exc_info=ex)
+        if not hc:
+            hc = HomeConnect()
 
-            if not delayed_load:
-                await hc._async_load_data(refresh)
+        hc._api = api
+        hc._refresh_mode = refresh
 
-            if auto_update and not delayed_load:
-                hc.subscribe_for_updates()
+        if not delayed_load:
+            await hc.async_load_data(refresh)
 
-            return hc
-        except Exception as ex:
-            _LOGGER.exception("Exception when creating HomeConnect object", exc_info=ex)
+        if auto_update and not delayed_load:
+            hc.subscribe_for_updates()
 
-        return None
+        return hc
 
-    def continue_data_load(self, refresh:RefreshMode = None, on_complete:Callable[[HomeConnect], None] = None) -> asyncio.Task:
+
+    def start_load_data_task(self, refresh:RefreshMode = None, on_complete:Callable[[HomeConnect], None] = None) -> asyncio.Task:
         """Complete the loading of the data when using delayed load
 
         This method can also be used for refreshing the data after it has been loaded.
@@ -117,47 +116,51 @@ class HomeConnect(DataClassJsonMixin):
         * refresh - optional refresh mode, if not supplied the value from async_create() will be used
         """
         refresh = refresh if refresh else self._refresh_mode
-        self._load_task = asyncio.create_task(self._async_load_data(refresh, on_complete), name="_async_load_data")
+        self._load_task = asyncio.create_task(self.async_load_data(refresh, on_complete), name="_async_load_data")
         return self._load_task
 
-    async def _async_load_data(self, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, on_complete:Callable[[HomeConnect], None] = None) -> None:
+    async def async_load_data(self, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, on_complete:Callable[[HomeConnect], None] = None) -> None:
         """ Loads or just refreshes the data model from the cloud service """
         self.status |= self.HomeConnectStatus.LOADING
 
-        if refresh == self.RefreshMode.NOTHING:
-            for appliance in self.appliances.values():
-                await self._broadcast_event(appliance, "PAIRED")
+        try:
+            if refresh == self.RefreshMode.NOTHING:
+                for appliance in self.appliances.values():
+                    await self._callbacks.async_broadcast_event(appliance, "PAIRED")
 
-        else:
-            response = await self._api.async_get('/api/homeappliances')
-            if response.status != 200:
-                raise HomeConnectError(f"Failed to get a valid response from the Home Connect server ({response.status})", response=response)
-            data = response.data
+            else:
+                response = await self._api.async_get('/api/homeappliances')
+                if response.status != 200:
+                    raise HomeConnectError(f"Failed to get a valid response from the Home Connect server ({response.status})", response=response)
+                data = response.data
 
-            haid_list = []
-            if 'homeappliances' in data:
-                for ha in data['homeappliances']:
-                    haid_list.append(ha['haId'])
-                    if ha['connected']:
-                        if ha['haId'] in self.appliances and refresh==self.RefreshMode.DYNAMIC_ONLY:
-                            # the appliance was already loaded so just refresh the data
-                            await self.appliances[ha['haId']].async_fetch_data(include_static_data=False)
-                        elif ha['haId'] not in self.appliances or refresh==self.RefreshMode.ALL:
-                            appliance = await Appliance.async_create(self._api, ha)
-                            self.appliances[ha['haId']] = appliance
-                        await self._broadcast_event(self.appliances[ha['haId']], "PAIRED")
+                haid_list = []
+                if 'homeappliances' in data:
+                    for ha in data['homeappliances']:
+                        haid_list.append(ha['haId'])
+                        if ha['connected']:
+                            if ha['haId'] in self.appliances and refresh==self.RefreshMode.DYNAMIC_ONLY:
+                                # the appliance was already loaded so just refresh the data
+                                await self.appliances[ha['haId']].async_fetch_data(include_static_data=False)
+                            elif ha['haId'] not in self.appliances or refresh==self.RefreshMode.ALL:
+                                appliance = await Appliance.async_create(self._api, ha)
+                                self.appliances[ha['haId']] = appliance
+                            await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], "PAIRED")
 
-            # clear appliances that are no longer paired with the service
-            for haId in self.appliances.keys():
-                if haId not in haid_list:
-                    await self._broadcast_event(self.appliances[haId], "DEPAIRED")
-                    del self.appliances[haId]
+                # clear appliances that are no longer paired with the service
+                for haId in self.appliances.keys():
+                    if haId not in haid_list:
+                        await self._callbacks.async_broadcast_event(self.appliances[haId], "DEPAIRED")
+                        del self.appliances[haId]
 
-        self.status |= self.HomeConnectStatus.LOADED
+            self.status |= self.HomeConnectStatus.LOADED
+        except:
+            self.status = self.HomeConnectStatus.LOADING_FAILED
+            raise
 
         if on_complete:
             if inspect.iscoroutinefunction(on_complete):
-                    await on_complete(self)
+                await on_complete(self)
             else:
                 on_complete(self)
 
@@ -194,7 +197,7 @@ class HomeConnect(DataClassJsonMixin):
 
     def __getitem__(self, haId) -> Appliance:
         """ Supports simple access to an appliance based on its haId """
-        self.appliances.get(haId)
+        return self.appliances.get(haId)
 
 
     #region - Event stream and updates
@@ -224,12 +227,12 @@ class HomeConnect(DataClassJsonMixin):
                     try:
                         await self._async_process_updates(event)
                     except Exception as ex:
-                        _LOGGER.exception('Unhandled exception in stream event handler', exc_info=ex)
+                        _LOGGER.debug('Unhandled exception in stream event handler', exc_info=ex)
             except asyncio.CancelledError:
                 break
             except ConnectionRefusedError as ex:
                 self.status &= self.HomeConnectStatus.NOUPDATES
-                _LOGGER.exception('ConnectionRefusedError in SSE connection refused. Will try again', exc_info=ex)
+                _LOGGER.debug('ConnectionRefusedError in SSE connection refused. Will try again', exc_info=ex)
             except ConnectionError as ex:
                 self.status &= self.HomeConnectStatus.NOUPDATES
                 error_code = parse_sse_error(ex.args[0])
@@ -237,9 +240,9 @@ class HomeConnect(DataClassJsonMixin):
                     backoff *= 2
                     if backoff > 3600: backoff = 3600
                     elif backoff < 60: backoff = 60
-                    _LOGGER.info('Got error 429 when opening event stream connection, will sleep for %s seconds and retry', backoff)
+                    _LOGGER.debug('Got error 429 when opening event stream connection, will sleep for %s seconds and retry', backoff)
                 else:
-                    _LOGGER.exception('ConnectionError in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
+                    _LOGGER.debug('ConnectionError in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
                     backoff *= 2
                     if backoff > 120: backoff = 120
 
@@ -250,7 +253,7 @@ class HomeConnect(DataClassJsonMixin):
                 _LOGGER.debug("The SSE connection timeed-out, will renew and retry")
             except Exception as ex:
                 self.status &= self.HomeConnectStatus.NOUPDATES
-                _LOGGER.exception('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
+                _LOGGER.debug('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
                 await asyncio.sleep(backoff)
                 backoff *= 2
                 if backoff > 120: backoff = 120
@@ -263,35 +266,38 @@ class HomeConnect(DataClassJsonMixin):
 
     async def _async_process_updates(self, event:MessageEvent):
         """ Handle the different kinds of events received over the SSE channel """
-        haId = event.last_event_id
+        haid = event.last_event_id
         if event.type == 'KEEP-ALIVE':
             self._last_update = datetime.now()
         elif event.type == 'PAIRED':
-            self.appliances[haId] = await Appliance.async_create(self._api, haId=haId)
-            await self._broadcast_event(self.appliances[haId], event.type)
+            self.appliances[haid] = await Appliance.async_create(self._api, haId=haid)
+            await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
         elif event.type == 'DEPAIRED':
-            if haId in self.appliances:
-                await self._broadcast_event(self.appliances[haId], event.type)
-                del self.appliances[haId]
+            if haid in self.appliances:
+                await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
+                del self.appliances[haid]
         elif event.type == 'DISCONNECTED':
-            if haId in self.appliances:
-                await self.appliances[haId].async_set_connection_state(False)
-                await self._broadcast_event(self.appliances[haId], event.type)
+            if haid in self.appliances:
+                await self.appliances[haid].async_set_connection_state(False)
+                await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
         elif event.type == 'CONNECTED':
-            if haId in self.appliances:
-                await self.appliances[haId].async_set_connection_state(True)
-                await self._broadcast_event(self.appliances[haId], event.type)
+            if haid in self.appliances:
+                await self.appliances[haid].async_set_connection_state(True)
+                await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
             else:
-                self.appliances[haId] = await Appliance.async_create(self._api, haId=haId)
-                await self._broadcast_event(self.appliances[haId], "PAIRED")
+                self.appliances[haid] = await Appliance.async_create(self._api, haId=haid)
+                await self._callbacks.async_broadcast_event(self.appliances[haid], "PAIRED")
         else:
             # Type is NOTIFY or EVENT
             data = json.loads(event.data)
             if 'items' in data:
                 for item in data['items']:
-                    haId = self._get_haId_from_event(item) if 'uri' in item else haId
-                    if haId in self.appliances:
-                        await self.appliances[haId]._async_broadcast_event(item['key'], item['value'])
+                    haid = self._get_haId_from_event(item) if 'uri' in item else haid
+                    if haid in self.appliances:
+                        if item['key'] in ['BSH.Common.Root.SelectedProgram', 'BSH.Common.Status.OperationState']:
+                            await self[haid].async_fetch_data(include_static_data=False)
+                        else:
+                            await self._callbacks.async_broadcast_event(self.appliances[haid], item['key'], item['value'])
 
 
     def _get_haId_from_event(self, event:dict):
@@ -306,34 +312,19 @@ class HomeConnect(DataClassJsonMixin):
         return haId
 
 
-    def register_callback(self, callback:Callable[[Appliance, str], None], keys:str|Sequence[str]):
-        """ Register for global events
+    def register_callback(self, callback:Callable[[Appliance, str], None] | Callable[[Appliance, str, any], None], keys:str|Sequence[str], appliance:Appliance|str = None):
+        """ Register callback for change event notifications
 
         Use the Appliance.register_callback() to register for appliance data update events
         """
-        if not isinstance(keys, list):
-            keys = [ keys ]
 
-        for key in keys:
-            if key not in self._callbacks:
-                self._callbacks[key] = set()
-            self._callbacks[key].add(callback)
+        self._callbacks.register_callback(callback, keys, appliance)
 
 
     def clear_all_callbacks(self):
         """ Clear all the registered callbacks """
-        self._callbacks = {}
-
-
-    async def _broadcast_event(self, appliance:Appliance, event:str):
-        """ Broadcast an event to all subscribed callbacks """
-        callbacks = self._callbacks.get(event)
-
-        if callbacks:
-            for callback in callbacks:
-                if inspect.iscoroutinefunction(callback):
-                    await callback(appliance, event)
-                else:
-                    callback(appliance, event)
+        self._callbacks.clear_all_callbacks()
 
     #endregion
+
+

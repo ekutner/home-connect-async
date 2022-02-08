@@ -17,3 +17,6 @@ class HomeConnectError(Exception):
 
         super().__init__(msg, code, self.error_key, self.error_description, inner_exception)
 
+class DeviceOfflineError(HomeConnectError):
+    def __init__(self, msg: str = None, code: int = None, response=None):
+        super().__init__(msg, code, response)

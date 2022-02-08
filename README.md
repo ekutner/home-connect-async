@@ -20,4 +20,4 @@ will be automatically generated for you.
 This SDK is was not created by BSH and is not affiliated with it in any way.
 
 # License
-This SDK is licensed under the MIT license
+This SDK is licensed under the MIT license.

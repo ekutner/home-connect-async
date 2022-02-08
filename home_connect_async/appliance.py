@@ -1,28 +1,29 @@
 from __future__ import annotations
-import inspect
+import asyncio
 import json
 import logging
-import fnmatch
+
+from collections.abc import Sequence, Callable
 from dataclasses import dataclass, field
-import re
 from typing import Optional
 from dataclasses_json import dataclass_json, Undefined, config
-from collections.abc import Sequence, Callable
 
-from .common import HomeConnectError
-from .api import HomeConnectApi
+import home_connect_async.homeconnect as homeconnect
+from .common import DeviceOfflineError, HomeConnectError
+from .const import EVENT_CONNECTION_CHANGED, EVENT_DATA_REFRESHED
 
 _LOGGER = logging.getLogger(__name__)
 
-@dataclass_json
+@dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class Option:
     """ Class to represent a Home Connect Option """
     key:str
-    type:Optional[str]
-    name:Optional[str]
-    unit:Optional[str]
-    value:Optional[any]
+    type:Optional[str] = None
+    name:Optional[str] = None
+    unit:Optional[str] = None
+    value:Optional[any] = None
+    displayvalue:Optional[str] = None
     min:Optional[int] = None
     max:Optional[int] = None
     stepsize:Optional[int] = None
@@ -37,6 +38,7 @@ class Option:
             name = data.get('name'),
             value = data.get('value'),
             unit = data.get('unit'),
+            displayvalue= data.get('displayvalue')
         )
         if 'constraints' in data:
             constraints:dict = data['constraints']
@@ -121,7 +123,8 @@ class Appliance():
     settings:dict[str, Option] = None
 
     # Internal fields
-    _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    #_api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _homeconnect:Optional[homeconnect.HomeConnect] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, decoder=lambda val: None, exclude=lambda val: True))
     _wildcard_callbacks:Optional[Sequence[str]] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _updates_callbacks:Optional[dict[str, Callable[[Appliance, str, any], None]]] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
@@ -185,7 +188,7 @@ class Appliance():
         if self.active_program is None:
             await self.async_get_active_program()
         if self.active_program:
-            response = await self._api.async_delete(f'{self._base_endpoint}/programs/active')
+            response = await self._homeconnect._api.async_delete(f'{self._base_endpoint}/programs/active')
             if response.status == 204:
                 return True
             elif response.error_description:
@@ -204,7 +207,7 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command)
-        response = await self._api.async_put(url, jscmd)
+        response = await self._homeconnect._api.async_put(url, jscmd)
         if response.status == 204:
             return True
         elif response.error_description:
@@ -223,7 +226,7 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command)
-        response = await self._api.async_put(url, jscmd)
+        response = await self._homeconnect._api.async_put(url, jscmd)
         if response.status == 204:
             return True
         elif response.error_description:
@@ -247,7 +250,7 @@ class Appliance():
             command['data']['options'] = options
 
         jscmd = json.dumps(command)
-        response = await self._api.async_put(url, jscmd)
+        response = await self._homeconnect._api.async_put(url, jscmd)
         if response.status == 204:
             return True
         elif response.error_description:
@@ -261,121 +264,56 @@ class Appliance():
         self.connected = connected
         if connected:
             await self.async_fetch_data(include_static_data=False)
-        await self._async_broadcast_event("CONNECTION_CHANGED", connected)
+        await self._homeconnect._callbacks.async_broadcast_event(self, EVENT_CONNECTION_CHANGED, connected)
 
 
     #region - Handle Updates, Events and Callbacks
 
-    async def _async_update_data(self, key:str, value) -> None:
-        """ Read or update the object's data structure with data from the cloud service """
-        if key == 'BSH.Common.Root.SelectedProgram':
-            self.selected_program = await self._async_fetch_programs('selected')
-        elif key == 'BSH.Common.Root.ActiveProgram':
-            self.active_program = await self._async_fetch_programs('active')
-        else:
-            if key == 'BSH.Common.Status.OperationState' and value == 'BSH.Common.EnumType.OperationState.Finished':
-                self.active_program = None
-            if self.selected_program and key in self.selected_program.options:
-                self.selected_program.options[key].value = value
-            if self.active_program and key in self.active_program.options:
-                self.active_program.options[key].value = value
-            if key in self.status:
-                self.status[key] = value
-            if key in self.settings:
-                self.settings[key].value = value
-
-
-    async def _async_broadcast_event(self, key:str, value):
-        """ Broadcast an event to all subscribed callbacks """
-        # first update the local data
-        await self._async_update_data(key, value)
-
-        # then dispatch the registered callbacks
-
-        handled:bool = False
-        # dispatch simple event callbacks
-        if key in self._updates_callbacks:
-            for callback in self._updates_callbacks[key]:
-                if inspect.iscoroutinefunction(callback):
-                    await callback(self, key, value)
-                else:
-                    callback(self, key, value)
-                handled = True
-
-        # dispatch wildcard or value based callbacks
-        for callback_record in self._wildcard_callbacks:
-            if callback_record["key"].fullmatch(key):
-                callback = callback_record['callback']
-                if inspect.iscoroutinefunction(callback):
-                    await callback(self, key, value)
-                else:
-                    callback(self, key, value)
-                handled = True
-
-        # dispatch default callbacks for unhandled events
-        if not handled and 'DEFAULT' in self._updates_callbacks:
-            for callback in self._updates_callbacks["DEFAULT"]:
-                if inspect.iscoroutinefunction(callback):
-                    await callback(self, key, value)
-                else:
-                    callback(self, key, value)
-                handled = True
+    # async def _async_update_data(self, key:str, value) -> None:
+    #     """ Read or update the object's data structure with data from the cloud service """
+    #     if key == 'BSH.Common.Root.SelectedProgram' or key == 'BSH.Common.Root.ActiveProgram':
+    #         self.selected_program = await self._async_fetch_programs('selected')
+    #         self.active_program = await self._async_fetch_programs('active')
+    #     else:
+    #         if key == 'BSH.Common.Status.OperationState' and value == 'BSH.Common.EnumType.OperationState.Finished':
+    #             self.active_program = None
+    #         if self.selected_program and key in self.selected_program.options:
+    #             self.selected_program.options[key].value = value
+    #         if self.active_program and key in self.active_program.options:
+    #             self.active_program.options[key].value = value
+    #         if key in self.status:
+    #             self.status[key] = value
+    #         if key in self.settings:
+    #             self.settings[key].value = value
 
 
     def register_callback(self, callback:Callable[[Appliance, str, any], None], keys:str|Sequence[str] ) -> None:
         """ Register a callback to be called when an update is received for the specified keys
             Wildcard syntax is also supported for the keys
 
-            They key "CONNECTION_CHANGED" will be used when the connection state of the appliance changes
+            They key EVENT_CONNECTION_CHANGED will be used when the connection state of the appliance changes
 
             The special key "DEFAULT" may be used to catch all unhandled events
         """
-        if keys is None:  raise ValueError("An event key must be specified")
-        elif not isinstance(keys, list): keys = [ keys ]
-
-        for key in keys:
-            if '*' in key:
-                callback_record = {
-                    "key": re.compile(fnmatch.translate(key), re.IGNORECASE),
-                    "callback": callback
-                }
-                self._wildcard_callbacks.append(callback_record)
-            else:
-                if key not in self._updates_callbacks:
-                    self._updates_callbacks[key] = set()
-                self._updates_callbacks[key].add(callback)
+        self._homeconnect._callbacks.register_callback(callback, keys, self)
 
     def deregister_callback(self, callback:Callable[[], None], keys:str|Sequence[str]) -> None:
         """ Clear a callback that was prevesiously registered so it stops getting notifications """
-        if keys is None:  raise ValueError("An event key must be specified")
-        elif not isinstance(keys, list): keys = [ keys ]
-
-        for key in keys:
-            if '*' in key:
-                callback_record = { "key": key, "callback": callback}
-                try:
-                    self._wildcard_callbacks.remove(callback_record)
-                except ValueError:
-                    # ignore if the value is not found in the list
-                    pass
-            else:
-                if key in self._updates_callbacks:
-                    self._updates_callbacks[key].remove(callback)
+        self._homeconnect._callbacks.deregister_callback(callback, keys, self)
 
     def clear_all_callbacks(self):
         """ Clear all the registered callbacks """
-        self._wildcard_callbacks = []
-        self._updates_callbacks = {}
+        self._homeconnect._callbacks.clear_appliance_callbacks(self)
 
 
     #endregion
 
     #region - Initialization and Data Loading
     @classmethod
-    async def async_create(cls, api:HomeConnectApi, properties:dict=None, haId:str=None) -> Appliance:
+    async def async_create(cls, hc:homeconnect.HomeConnect, properties:dict=None, haId:str=None) -> Appliance:
         """ A factory to create an instance of the class """
         if haId:
-            response = await api.async_get(f"/api/homeappliances/{haId}")  # This should either work or raise an exception
+            response = await hc._api.async_get(f"/api/homeappliances/{haId}")  # This should either work or raise an exception
             properties = response.data
 
         appliance = cls(
@@ -388,7 +326,7 @@ class Appliance():
             haId = properties['haId'],
             uri = f"/api/homeappliances/{properties['haId']}"
         )
-        appliance._api = api
+        appliance._homeconnect = hc
         appliance.clear_all_callbacks()
 
         await appliance.async_fetch_data()
@@ -397,19 +335,38 @@ class Appliance():
 
     _base_endpoint = property(lambda self: f"/api/homeappliances/{self.haId}")
 
-    async def async_fetch_data(self, include_static_data:bool=True):
-        """ Load the appliance data from the cloud service """
-        if include_static_data:
-            self.available_programs = await self._async_fetch_programs('available')
-        self.selected_program = await self._async_fetch_programs('selected')
-        self.active_program = await self._async_fetch_programs('active')
-        self.settings = await self._async_fetch_settings()
-        self.status = await self._async_fetch_status()
+    async def async_fetch_data(self, include_static_data:bool=True, delay=0):
+        """ Load the appliance data from the cloud service
 
-    async def _async_fetch_programs(self, kind:str):
+        Either a DATA_REFRESHED or CONNECTION_CHANGED even will be fired after the data is updated
+        """
+
+        if delay>0:
+            await asyncio.sleep(delay)
+        try:
+            if include_static_data:
+                self.available_programs = await self._async_fetch_programs('available')
+            self.selected_program = await self._async_fetch_programs('selected')
+            self.active_program = await self._async_fetch_programs('active')
+            self.settings = await self._async_fetch_settings()
+            self.status = await self._async_fetch_status()
+
+            if not self.connected:
+                await self.async_set_connection_state(True)
+            else:
+                await self._homeconnect._callbacks.async_broadcast_event(self, EVENT_DATA_REFRESHED)
+
+        except DeviceOfflineError:
+            # sometime devices are offline despite the appliance being listed as connected so no event is sent when the device goes online again
+            # so we mark the appliance as not connected and keep retrying until we get the data
+            await self.async_set_connection_state(False)
+            delay = delay + 60 if delay<300 else 300
+            self._wait_for_device_task = asyncio.create_task(self.async_fetch_data(include_static_data, delay=delay))
+
+    async def _async_fetch_programs(self, program_type:str):
         """ Main function to fetch the different kinds of programs with their options from the cloud service """
-        endpoint = f'{self._base_endpoint}/programs/{kind}'
-        response = await self._api.async_get(endpoint)
+        endpoint = f'{self._base_endpoint}/programs/{program_type}'
+        response = await self._homeconnect._api.async_get(endpoint)
         if response.status == 404 or response.error_key == "SDK.Error.UnsupportedOperation":
             return None
         elif not response.data:
@@ -426,12 +383,12 @@ class Appliance():
             if 'options' in p:
                 options = self.optionlist_to_dict(p['options'])
             else:
-                options = await self._async_fetch_options(f"programs/{kind}/{p['key']}", "options")
+                options = await self._async_fetch_options(program_type, p['key'])
             prog.options = options
 
             programs[p['key']] = prog
 
-        if kind in ['selected', 'active'] and len(programs)==1:
+        if program_type in ['selected', 'active'] and len(programs)==1:
             return list(programs.values())[0]
         else:
             return programs
@@ -439,11 +396,9 @@ class Appliance():
     async def _async_fetch_status(self):
         """ Fetch the appliance status values """
         endpoint = f'{self._base_endpoint}/status'
-        response = await self._api.async_get(endpoint)
-        if response.status == 409:
-            raise HomeConnectError(msg="The appliance didn't respond (409)", response=response)
+        response = await self._homeconnect._api.async_get(endpoint)
         data = response.data
-        if data is None or 'status' not in data: return None
+        if data is None or 'status' not in data: return {}
 
         res = {}
         for status in data['status']:
@@ -453,34 +408,46 @@ class Appliance():
     async def _async_fetch_settings(self):
         """ Fetch the appliance settings """
         endpoint = f'{self._base_endpoint}/settings'
-        response = await self._api.async_get(endpoint)
-        if response.status == 408:
-            raise HomeConnectError(msg="The appliance didn't respond (408)", response=response)
+        response = await self._homeconnect._api.async_get(endpoint)
         data = response.data
-        if data is None or 'settings' not in data: return None
+        if data is None or 'settings' not in data: return {}
 
         settings = {}
         for setting in data['settings']:
             endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
-            response = await self._api.async_get(endpoint)
+            response = await self._homeconnect._api.async_get(endpoint)
             if response.status != 200:
                 continue
             settings[setting['key']] = Option.create(response.data)
         return settings
 
-    async def _async_fetch_options(self, uri_suffix, subkey=None):
-        """ Helper function to fetch detailed options of a program """
-        if subkey == None:
-            subkey = uri_suffix
-        endpoint = f'{self._base_endpoint}/{uri_suffix}'
-        response = await self._api.async_get(endpoint)      # This is expected to always succeed if the previous call succeeds
-        data = response.data
-        if data is None or subkey not in data:
-            return None
+    async def _async_fetch_options(self, program_type:str, program_key:str=None):
+        """ Fetch detailed options of a program """
+
+        if True or program_type=='available':
+            endpoint = f"{self._base_endpoint}/programs/available/{program_key}"
         else:
-            return self.optionlist_to_dict(data[subkey])
+            endpoint = f"{self._base_endpoint}/programs/{program_type}/options"
+
+        response = await self._homeconnect._api.async_get(endpoint)      # This is expected to always succeed if the previous call succeeds
+        data = response.data
+        if data is None or 'options' not in data:
+            return None
+
+        if True or program_type=='avilable':
+            return self.optionlist_to_dict(data['options'])
+        # else:
+        #     options = {}
+        #     for option in data['options']:
+        #         endpoint = f"{self._base_endpoint}/programs/available/options/{option['key']}"
+        #         respnose = await self._homeconnect.api.async_get(endpoint)
+        #         o = Option.create(response.data)
+        #         options[o.key] = o
+        #     return options
+
 
     def optionlist_to_dict(self, l:Sequence[dict]) -> dict:
+        """ Helper funtion to convert a list of options into a dictionary keyd by the option "key" """
         d = {}
         for element in l:
             d[element['key']] = Option.create(element)
