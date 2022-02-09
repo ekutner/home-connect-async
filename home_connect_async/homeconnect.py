@@ -106,7 +106,11 @@ class HomeConnect(DataClassJsonMixin):
         return hc
 
 
-    def start_load_data_task(self, refresh:RefreshMode = None, on_complete:Callable[[HomeConnect], None] = None) -> asyncio.Task:
+    def start_load_data_task(self,
+        refresh:RefreshMode = None,
+        on_complete:Callable[[HomeConnect], None] = None,
+        on_error:Callable[[HomeConnect, Exception], None] = None
+    ) -> asyncio.Task:
         """Complete the loading of the data when using delayed load
 
         This method can also be used for refreshing the data after it has been loaded.
@@ -116,10 +120,14 @@ class HomeConnect(DataClassJsonMixin):
         * refresh - optional refresh mode, if not supplied the value from async_create() will be used
         """
         refresh = refresh if refresh else self._refresh_mode
-        self._load_task = asyncio.create_task(self.async_load_data(refresh, on_complete), name="_async_load_data")
+        self._load_task = asyncio.create_task(self.async_load_data(refresh, on_complete, on_error), name="_async_load_data")
         return self._load_task
 
-    async def async_load_data(self, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, on_complete:Callable[[HomeConnect], None] = None) -> None:
+    async def async_load_data(self,
+        refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
+        on_complete:Callable[[HomeConnect], None] = None,
+        on_error:Callable[[HomeConnect, Exception], None] = None
+    ) -> None:
         """ Loads or just refreshes the data model from the cloud service """
         self.status |= self.HomeConnectStatus.LOADING
 
@@ -143,9 +151,10 @@ class HomeConnect(DataClassJsonMixin):
                                 # the appliance was already loaded so just refresh the data
                                 await self.appliances[ha['haId']].async_fetch_data(include_static_data=False)
                             elif ha['haId'] not in self.appliances or refresh==self.RefreshMode.ALL:
-                                appliance = await Appliance.async_create(self._api, ha)
+                                appliance = await Appliance.async_create(self, ha)
                                 self.appliances[ha['haId']] = appliance
                             await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], "PAIRED")
+                            _LOGGER.debug("Loadded appliance: %s", self.appliances[ha['haId']].name)
 
                 # clear appliances that are no longer paired with the service
                 for haId in self.appliances.keys():
@@ -154,8 +163,14 @@ class HomeConnect(DataClassJsonMixin):
                         del self.appliances[haId]
 
             self.status |= self.HomeConnectStatus.LOADED
-        except:
+        except Exception as ex:
+            _LOGGER.warning("Failed to load data from Home Connect (%s)", str(ex), exc_info=ex)
             self.status = self.HomeConnectStatus.LOADING_FAILED
+            if on_error:
+                if inspect.iscoroutinefunction(on_error):
+                    await on_error(self, ex)
+                else:
+                    on_error(self, ex)
             raise
 
         if on_complete:

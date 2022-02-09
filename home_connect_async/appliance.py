@@ -327,7 +327,6 @@ class Appliance():
             uri = f"/api/homeappliances/{properties['haId']}"
         )
         appliance._homeconnect = hc
-        appliance.clear_all_callbacks()
 
         await appliance.async_fetch_data()
 
