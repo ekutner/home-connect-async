@@ -13,6 +13,7 @@ from dataclasses_json import Undefined, config, DataClassJsonMixin
 
 from aiohttp_sse_client.client import MessageEvent
 
+from .const import Events
 from .common import HomeConnectError
 from .callback_registery import CallbackRegistry
 from .appliance import Appliance
@@ -134,7 +135,7 @@ class HomeConnect(DataClassJsonMixin):
         try:
             if refresh == self.RefreshMode.NOTHING:
                 for appliance in self.appliances.values():
-                    await self._callbacks.async_broadcast_event(appliance, "PAIRED")
+                    await self._callbacks.async_broadcast_event(appliance, Events.PAIRED)
 
             else:
                 response = await self._api.async_get('/api/homeappliances')
@@ -153,13 +154,13 @@ class HomeConnect(DataClassJsonMixin):
                             elif ha['haId'] not in self.appliances or refresh==self.RefreshMode.ALL:
                                 appliance = await Appliance.async_create(self, ha)
                                 self.appliances[ha['haId']] = appliance
-                            await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], "PAIRED")
+                            await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], Events.PAIRED)
                             _LOGGER.debug("Loadded appliance: %s", self.appliances[ha['haId']].name)
 
                 # clear appliances that are no longer paired with the service
                 for haId in self.appliances.keys():
                     if haId not in haid_list:
-                        await self._callbacks.async_broadcast_event(self.appliances[haId], "DEPAIRED")
+                        await self._callbacks.async_broadcast_event(self.appliances[haId], Events.DEPAIRED)
                         del self.appliances[haId]
 
             self.status |= self.HomeConnectStatus.LOADED
@@ -286,22 +287,22 @@ class HomeConnect(DataClassJsonMixin):
             self._last_update = datetime.now()
         elif event.type == 'PAIRED':
             self.appliances[haid] = await Appliance.async_create(self._api, haId=haid)
-            await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
+            await self._callbacks.async_broadcast_event(self.appliances[haid],  Events.PAIRED)
         elif event.type == 'DEPAIRED':
             if haid in self.appliances:
-                await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
+                await self._callbacks.async_broadcast_event(self.appliances[haid], Events.DEPAIRED)
                 del self.appliances[haid]
-        elif event.type == 'DISCONNECTED':
+        elif event.type =='DISCONNECTED':
             if haid in self.appliances:
                 await self.appliances[haid].async_set_connection_state(False)
-                await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
+                await self._callbacks.async_broadcast_event(self.appliances[haid], Events.DISCONNECTED)
         elif event.type == 'CONNECTED':
             if haid in self.appliances:
                 await self.appliances[haid].async_set_connection_state(True)
-                await self._callbacks.async_broadcast_event(self.appliances[haid], event.type)
+                await self._callbacks.async_broadcast_event(self.appliances[haid], Events.CONNECTED)
             else:
                 self.appliances[haid] = await Appliance.async_create(self._api, haId=haid)
-                await self._callbacks.async_broadcast_event(self.appliances[haid], "PAIRED")
+                await self._callbacks.async_broadcast_event(self.appliances[haid], Events.PAIRED)
         else:
             # Type is NOTIFY or EVENT
             data = json.loads(event.data)

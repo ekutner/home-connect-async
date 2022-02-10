@@ -1,25 +1,35 @@
 from __future__ import annotations
+from argparse import Action
 import fnmatch
 import inspect
 import re
 from typing import Callable
 from collections.abc import Sequence
 
+from .const import Events
 from .appliance import Appliance
 
 
-WILDCARD_KEY = "WILDCARD"
-DEFAULT_KEY = "DEFAULT"
 class CallbackRegistry():
     """ Calss for managing callback registration and notifications """
+    WILDCARD_KEY = "WILDCARD"
 
     def __init__(self) -> None:
         self._callbacks = {}
 
-    def register_callback(self, callback:Callable[[Appliance, str], None] | Callable[[Appliance, str, any], None], keys:str|Sequence[str], appliance:Appliance|str = None):
+    def register_callback(self,
+        callback:Callable[[Appliance, str, any], None] | Callable[[Appliance, str], None] | Callable[[Appliance], None] | Callable[[], None],
+        keys:str|Events|Sequence[str|Events],
+        appliance:Appliance|str = None
+    ):
         """ Register callback for change event notifications
 
         Use the Appliance.register_callback() to register for appliance data update events
+
+        Parameters:
+        * callback - A callback function to call when the event occurs, all the parameters are optional
+        * keys - A single event key or a list of event keys. An event key may be one of the values of the "Events" enum or a string with a BSH event ID
+        * appliance - An optional appliance object or haId to filter the events for
         """
 
         if not isinstance(keys, list):
@@ -36,17 +46,17 @@ class CallbackRegistry():
                     "key": re.compile(fnmatch.translate(key), re.IGNORECASE),
                     "callback": callback
                 }
-                if WILDCARD_KEY not in self._callbacks[haid]:
-                    self._callbacks[haid][WILDCARD_KEY] = []
-                self._callbacks[haid][WILDCARD_KEY].append(callback_record)
+                if self.WILDCARD_KEY not in self._callbacks[haid]:
+                    self._callbacks[haid][self.WILDCARD_KEY] = []
+                self._callbacks[haid][self.WILDCARD_KEY].append(callback_record)
             else:
                 if key not in self._callbacks[haid]:
                     self._callbacks[haid][key] = set()
                 self._callbacks[haid][key].add(callback)
 
     def deregister_callback(self,
-        callback:Callable[[Appliance], None] | Callable[[Appliance, str], None] | Callable[[Appliance, str, any], None],
-        keys:str|Sequence[str],
+        callback:Callable[[Appliance, str, any], None] | Callable[[Appliance, str], None] | Callable[[Appliance], None] | Callable[[], None],
+        keys:str|Events|Sequence[str|Events],
         appliance:Appliance|str = None
     ):
         """ Clear a callback that was prevesiously registered so it stops getting notifications """
@@ -66,8 +76,8 @@ class CallbackRegistry():
                     "callback": callback
                 }
                 try:
-                    if haid in self._callbacks and WILDCARD_KEY in self._callbacks[haid]:
-                        self._callbacks[haid][WILDCARD_KEY].remove(callback_record)
+                    if haid in self._callbacks and self.WILDCARD_KEY in self._callbacks[haid]:
+                        self._callbacks[haid][self.WILDCARD_KEY].remove(callback_record)
                 except ValueError:
                     # ignore if the value is not found in the list
                     pass
@@ -86,7 +96,7 @@ class CallbackRegistry():
         if haid in self._callbacks:
             del self._callbacks[haid]
 
-    async def async_broadcast_event(self, appliance:Appliance, event_key:str, value:any = None) -> None:
+    async def async_broadcast_event(self, appliance:Appliance, event_key:str|Events, value:any = None) -> None:
         """ Broadcast an event to all subscribed callbacks """
 
         handled:bool = False
@@ -100,20 +110,20 @@ class CallbackRegistry():
                     handled = True
 
             # dispatch wildcard or value based callbacks
-            if WILDCARD_KEY in self._callbacks[haid]:
-                for callback_record in self._callbacks[haid][WILDCARD_KEY]:
+            if self.WILDCARD_KEY in self._callbacks[haid]:
+                for callback_record in self._callbacks[haid][self.WILDCARD_KEY]:
                     if callback_record["key"].fullmatch(event_key):
                         callback = callback_record['callback']
                         await self._async_call(callback, appliance, event_key, value)
                         handled = True
 
             # dispatch default callbacks for unhandled events
-            if not handled and DEFAULT_KEY in self._callbacks[haid]:
-                for callback in self._callbacks[DEFAULT_KEY]:
+            if not handled and Events.UNHANDLED in self._callbacks[haid]:
+                for callback in self._callbacks[Events.UNHANDLED]:
                     self._async_call(callback, appliance, event_key, value)
 
 
-    async def _async_call(self, callback:Callable, appliance:Appliance, event_key:str, value:any) -> None:
+    async def _async_call(self, callback:Callable, appliance:Appliance, event_key:str|Events, value:any) -> None:
         """ Helper funtion to make the right kind of call to the callback funtion """
         sig = inspect.signature(callback)
         param_count = len(sig.parameters)

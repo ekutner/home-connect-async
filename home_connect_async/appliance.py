@@ -9,14 +9,15 @@ from typing import Optional
 from dataclasses_json import dataclass_json, Undefined, config
 
 import home_connect_async.homeconnect as homeconnect
+from .const import Events
 from .common import DeviceOfflineError, HomeConnectError
-from .const import EVENT_CONNECTION_CHANGED, EVENT_DATA_REFRESHED
+
 
 _LOGGER = logging.getLogger(__name__)
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
-class Option:
+class Option():
     """ Class to represent a Home Connect Option """
     key:str
     type:Optional[str] = None
@@ -74,7 +75,7 @@ class Option:
 
 @dataclass_json
 @dataclass
-class Program:
+class Program():
     """ Class to represent a Home Connect Program """
 
     key:str
@@ -264,7 +265,7 @@ class Appliance():
         self.connected = connected
         if connected:
             await self.async_fetch_data(include_static_data=False)
-        await self._homeconnect._callbacks.async_broadcast_event(self, EVENT_CONNECTION_CHANGED, connected)
+        await self._homeconnect._callbacks.async_broadcast_event(self, Events.CONNECTION_CHANGED, connected)
 
 
     #region - Handle Updates, Events and Callbacks
@@ -291,7 +292,7 @@ class Appliance():
         """ Register a callback to be called when an update is received for the specified keys
             Wildcard syntax is also supported for the keys
 
-            They key EVENT_CONNECTION_CHANGED will be used when the connection state of the appliance changes
+            The key Events.CONNECTION_CHANGED will be used when the connection state of the appliance changes
 
             The special key "DEFAULT" may be used to catch all unhandled events
         """
@@ -337,7 +338,7 @@ class Appliance():
     async def async_fetch_data(self, include_static_data:bool=True, delay=0):
         """ Load the appliance data from the cloud service
 
-        Either a DATA_REFRESHED or CONNECTION_CHANGED even will be fired after the data is updated
+        Either a Events.DATA_CHANGED or Events.CONNECTION_CHANGED even will be fired after the data is updated
         """
 
         if delay>0:
@@ -353,7 +354,7 @@ class Appliance():
             if not self.connected:
                 await self.async_set_connection_state(True)
             else:
-                await self._homeconnect._callbacks.async_broadcast_event(self, EVENT_DATA_REFRESHED)
+                await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         except DeviceOfflineError:
             # sometime devices are offline despite the appliance being listed as connected so no event is sent when the device goes online again
