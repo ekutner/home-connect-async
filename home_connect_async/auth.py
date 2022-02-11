@@ -27,7 +27,7 @@ class AbstractAuth(ABC):
     async def async_get_access_token(self) -> str:
         """Return a valid access token."""
 
-    async def request(self, method, endpoint:str, **kwargs) -> ClientResponse:
+    async def request(self, method, endpoint:str, lang:str=None, **kwargs) -> ClientResponse:
         """Make a request."""
         headers = kwargs.get("headers")
 
@@ -39,7 +39,7 @@ class AbstractAuth(ABC):
         access_token = await self.async_get_access_token()
         headers['authorization'] = f'Bearer {access_token}'
         headers['Accept'] = 'application/vnd.bsh.sdk.v1+json'
-        headers['Accept-Language'] = 'en-GB'
+        headers['Accept-Language'] = lang if lang else 'en-GB'
         if method == 'put':
             headers['Content-Type'] = 'application/vnd.bsh.sdk.v1+json'
 
@@ -53,7 +53,7 @@ class AbstractAuth(ABC):
         access_token = await self.async_get_access_token()
         headers['authorization'] = f'Bearer {access_token}'
         headers['Accept'] = 'application/vnd.bsh.sdk.v1+json'
-        headers['Accept-Language'] = 'en-GB'
+        #headers['Accept-Language'] = 'en-GB'
         #timeout = aiohttp.ClientTimeout(total = ( self._auth.access_token_expirs_at - datetime.now() ).total_seconds() )
         timeout = aiohttp.ClientTimeout(total = 3600 )
         return sse_client.EventSource(f"{self.host}{endpoint}", session=self.websession, headers=headers, timeout=timeout, **kwargs)

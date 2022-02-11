@@ -7,10 +7,9 @@ from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
 from .common import HomeConnectError, DeviceOfflineError
-from .const import *
+
 
 _LOGGER = logging.getLogger(__name__)
-
 
 class HomeConnectApi():
     """ A class that provides basic API calling facilities to the Home Connect API """
@@ -45,8 +44,9 @@ class HomeConnectApi():
             return None
 
 
-    def __init__(self, auth:AbstractAuth):
+    def __init__(self, auth:AbstractAuth, lang:str=None):
         self._auth = auth
+        self._lang = lang
 
 
     async def _async_request(self, method, endpoint, data=None) -> ApiResponse:
@@ -55,7 +55,7 @@ class HomeConnectApi():
         response = None
         while retry:
             try:
-                response = await self._auth.request(method, endpoint, data=data)
+                response = await self._auth.request(method, endpoint, self._lang,  data=data)
                 if response.status == 429:    # Too Many Requests
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
@@ -85,11 +85,11 @@ class HomeConnectApi():
         raise HomeConnectError("Failed to get a valid response from Home Connect server", 902)
 
 
-    async def async_get(self, endpoint, lang='en-GB') -> ApiResponse:
+    async def async_get(self, endpoint) -> ApiResponse:
         """ Implements a HTTP GET request """
         return await self._async_request('get', endpoint)
 
-    async def async_put(self, endpoint:str, data:str, lang='en-GB') -> ApiResponse:
+    async def async_put(self, endpoint:str, data:str) -> ApiResponse:
         """ Implements a HTTP PUT request """
         return await self._async_request('put', endpoint, data=data)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
-from argparse import Action
 import fnmatch
 import inspect
+import logging
 import re
 from typing import Callable
 from collections.abc import Sequence
@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from .const import Events
 from .appliance import Appliance
 
+_LOGGER = logging.getLogger(__name__)
 
 class CallbackRegistry():
     """ Calss for managing callback registration and notifications """
@@ -99,6 +100,7 @@ class CallbackRegistry():
     async def async_broadcast_event(self, appliance:Appliance, event_key:str|Events, value:any = None) -> None:
         """ Broadcast an event to all subscribed callbacks """
 
+        _LOGGER.debug("Broadcasting event: %s = %s", event_key, str(value))
         handled:bool = False
         haid = appliance.haId
 
@@ -127,25 +129,32 @@ class CallbackRegistry():
         """ Helper funtion to make the right kind of call to the callback funtion """
         sig = inspect.signature(callback)
         param_count = len(sig.parameters)
-        if inspect.iscoroutinefunction(callback):
-            if param_count == 3:
-                await callback(appliance, event_key, value)
-            elif param_count == 2:
-                await callback(appliance, event_key)
-            elif param_count == 1:
-                await callback(appliance)
-            elif param_count == 0:
-                await callback()
+        callback_error = False
+        try:
+            if inspect.iscoroutinefunction(callback):
+                if param_count == 3:
+                    await callback(appliance, event_key, value)
+                elif param_count == 2:
+                    await callback(appliance, event_key)
+                elif param_count == 1:
+                    await callback(appliance)
+                elif param_count == 0:
+                    await callback()
+                else:
+                    callback_error = True
+
             else:
-                raise ValueError(f"Unexpected number of callback parameters: {sig}")
-        else:
-            if param_count == 3:
-                callback(appliance, event_key, value)
-            elif param_count == 2:
-                callback(appliance, event_key)
-            elif param_count == 1:
-                callback(appliance)
-            elif param_count == 0:
-                callback()
-            else:
-                raise ValueError(f"Unexpected number of callback parameters: {sig}")
+                if param_count == 3:
+                    callback(appliance, event_key, value)
+                elif param_count == 2:
+                    callback(appliance, event_key)
+                elif param_count == 1:
+                    callback(appliance)
+                elif param_count == 0:
+                    callback()
+                else:
+                    callback_error = True
+        except Exception as ex:
+            _LOGGER.warning("Unhandled exception in callback function for event_key: %s", event_key, exc_info=ex)
+        if callback_error:
+            raise ValueError(f"Unexpected number of callback parameters: {sig}")

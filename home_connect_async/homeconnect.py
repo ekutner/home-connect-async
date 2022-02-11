@@ -67,7 +67,13 @@ class HomeConnect(DataClassJsonMixin):
     _callbacks:Optional[CallbackRegistry] = field(default_factory=lambda: CallbackRegistry(), metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
     @classmethod
-    async def async_create(cls, am:AuthManager, json_data:str=None, delayed_load:bool=False, refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY, auto_update:bool=False) -> HomeConnect:
+    async def async_create(cls,
+        am:AuthManager,
+        json_data:str=None,
+        delayed_load:bool=False,
+        refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
+        auto_update:bool=False,
+        lang:str=None) -> HomeConnect:
         """ Factory for creating a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
 
         Parameters:
@@ -81,7 +87,7 @@ class HomeConnect(DataClassJsonMixin):
 
         If auto_update is set to False then subscribe_for_updates() should be called to receive real-time updates to the data
         """
-        api = HomeConnectApi(am)
+        api = HomeConnectApi(am, lang)
         hc:HomeConnect = None
         if json_data:
             try:
@@ -310,10 +316,18 @@ class HomeConnect(DataClassJsonMixin):
                 for item in data['items']:
                     haid = self._get_haId_from_event(item) if 'uri' in item else haid
                     if haid in self.appliances:
-                        if item['key'] in ['BSH.Common.Root.SelectedProgram', 'BSH.Common.Status.OperationState']:
-                            await self[haid].async_fetch_data(include_static_data=False)
-                        else:
-                            await self._callbacks.async_broadcast_event(self.appliances[haid], item['key'], item['value'])
+                        appliance = self.appliances[haid]
+                        await appliance.async_update_data(item['key'], item['value'])
+
+                        # if item['key'] in ['BSH.Common.Root.SelectedProgram', 'BSH.Common.Status.OperationState']:
+                        #     await self[haid].async_fetch_data(include_static_data=False)
+                        #     if item['value'] == 'BSH.Common.EnumType.OperationState.Run':
+                        #         await self._callbacks.async_broadcast_event(appliance, Events.PROGRAM_STARTED)
+                        #     elif item['value'] == 'BSH.Common.EnumType.OperationState.Finished':
+                        #         await self._callbacks.async_broadcast_event(appliance, Events.PROGRAM_FINISHED)
+
+                        # else:
+                        #     await self._callbacks.async_broadcast_event(appliance, item['key'], item['value'])
 
 
     def _get_haId_from_event(self, event:dict):
