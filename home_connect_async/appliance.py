@@ -363,6 +363,11 @@ class Appliance():
             delay = delay + 60 if delay<300 else 300
             self._wait_for_device_task = asyncio.create_task(self.async_fetch_data(include_static_data, delay=delay))
 
+        except HomeConnectError as ex:
+            if ex.error_key and ex.error_key.startswith("SDK.Error."):
+                await self.async_set_connection_state(False)
+                delay = delay + 60 if delay<300 else 300
+                self._wait_for_device_task = asyncio.create_task(self.async_fetch_data(include_static_data, delay=delay))
 
     async def async_update_data(self, key:str, value) -> None:
         """ Update the appliance data model from a change event notification """
@@ -375,15 +380,19 @@ class Appliance():
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
         else:
-            if key == 'BSH.Common.Status.OperationState' and value == 'BSH.Common.EnumType.OperationState.Finished':
-                self.active_program = None
-                await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
-
-                # Workaround for the fact the API doesn't provide all the data (such as available programs)
-                # when a program is active, so if for some reason we were loaded with missing data reload it
-                if self.available_programs and len(self.available_programs) < 2:
-                    await self.async_fetch_data(include_static_data=True)
-                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
+            if key == 'BSH.Common.Status.OperationState':
+                if value == 'BSH.Common.EnumType.OperationState.Finished':
+                    self.active_program = None
+                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
+                elif value == 'BSH.Common.EnumType.OperationState.Ready':
+                    # Workaround for the fact the API doesn't provide all the data (such as available programs)
+                    # when a program is active, so if for some reason we were loaded with missing data reload it
+                    if not self.available_programs or len(self.available_programs) < 2:
+                        try:
+                            await self.async_fetch_data(include_static_data=True)
+                            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
+                        except:
+                            pass
 
             if self.selected_program and key in self.selected_program.options:
                 self.selected_program.options[key].value = value
@@ -394,7 +403,7 @@ class Appliance():
             if key in self.settings:
                 self.settings[key].value = value
 
-            await self._homeconnect._callbacks.async_broadcast_event(self, key, value)
+        await self._homeconnect._callbacks.async_broadcast_event(self, key, value)
 
 
     async def _async_fetch_programs(self, program_type:str):
