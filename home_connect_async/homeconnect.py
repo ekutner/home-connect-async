@@ -240,6 +240,7 @@ class HomeConnect(DataClassJsonMixin):
         event_source = None
         while True:
             try:
+                _LOGGER.debug("Connecting to SSE stream")
                 event_source = await self._api.async_get_event_stream('/api/homeappliances/events')
                 await event_source.connect()
                 self.status |= self.HomeConnectStatus.UPDATES
@@ -284,6 +285,8 @@ class HomeConnect(DataClassJsonMixin):
                 if event_source:
                     await event_source.close()
                     event_source = None
+
+        _LOGGER.debug("Exiting SSE event stream")
 
 
     async def _async_process_updates(self, event:MessageEvent):

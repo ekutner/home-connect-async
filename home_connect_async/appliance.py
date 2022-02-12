@@ -2,10 +2,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-
 from collections.abc import Sequence, Callable
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, overload
+import typing
 from dataclasses_json import dataclass_json, Undefined, config
 
 import home_connect_async.homeconnect as homeconnect
@@ -105,6 +105,42 @@ class Program():
         return self
 
 
+_KT = typing.TypeVar("_KT") #  key type
+_VT = typing.TypeVar("_VT") #  value type
+class ProgramsDict(dict[str, Program]):
+    """ A custom dictionary class to handle undocumented program keys that have sub-keys """
+    def __contains__(self, key: str) -> bool:
+        if not super().__contains__(key) and isinstance(key, str):
+            key_parts = key.split('.')
+            if super().__contains__('.'.join(key_parts[:-1])):
+                return True
+        return super().__contains__(key)
+
+    def __getitem__(self, __k: _KT) -> _VT:
+        if not super().__contains__(__k) and isinstance(__k, str):
+            key_parts = __k.split('.')
+            subkey = '.'.join(key_parts[:-1])
+            if super().__contains__(subkey):
+                return super().__getitem__(subkey)
+
+        return super().__getitem__(__k)
+
+    def get(self, __key:str, __default=None):
+        key = self.contained_subkey(__key)
+        if key:
+            return super().get(key)
+        return __default
+
+    def contained_subkey(self, key) -> str|None:
+        """ Get the longest valid subkey of the the passed key which is contained
+        in the dictionary or None if no such subkey exists"""
+        key_parts = key.split('.')
+        for l in range(len(key_parts), len(key_parts)-2, -1):
+            subkey = '.'.join(key_parts[:l])
+            if super().__contains__(subkey):
+                return subkey
+        return None
+
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class Appliance():
@@ -117,7 +153,7 @@ class Appliance():
     enumber:str
     haId:str
     uri:str
-    available_programs:Optional[dict[str, Program]] = None
+    available_programs:Optional[ProgramsDict[str,Program]] = None
     active_program:Optional[Program] = None
     selected_program:Optional[Program] = None
     status:dict[str, any] = None
@@ -270,23 +306,42 @@ class Appliance():
 
     #region - Handle Updates, Events and Callbacks
 
-    # async def _async_update_data(self, key:str, value) -> None:
-    #     """ Read or update the object's data structure with data from the cloud service """
-    #     if key == 'BSH.Common.Root.SelectedProgram' or key == 'BSH.Common.Root.ActiveProgram':
-    #         self.selected_program = await self._async_fetch_programs('selected')
-    #         self.active_program = await self._async_fetch_programs('active')
-    #     else:
-    #         if key == 'BSH.Common.Status.OperationState' and value == 'BSH.Common.EnumType.OperationState.Finished':
-    #             self.active_program = None
-    #         if self.selected_program and key in self.selected_program.options:
-    #             self.selected_program.options[key].value = value
-    #         if self.active_program and key in self.active_program.options:
-    #             self.active_program.options[key].value = value
-    #         if key in self.status:
-    #             self.status[key] = value
-    #         if key in self.settings:
-    #             self.settings[key].value = value
+    async def async_update_data(self, key:str, value) -> None:
+        """ Update the appliance data model from a change event notification """
 
+        if key == 'BSH.Common.Root.SelectedProgram':
+            self.selected_program = await self._async_fetch_programs('selected')
+            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif key == 'BSH.Common.Root.ActiveProgram':
+            self.active_program = await self._async_fetch_programs('active')
+            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
+        else:
+            if key == 'BSH.Common.Status.OperationState':
+                if value == 'BSH.Common.EnumType.OperationState.Finished':
+                    self.active_program = None
+                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
+                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+                elif value == 'BSH.Common.EnumType.OperationState.Ready':
+                    # Workaround for the fact the API doesn't provide all the data (such as available programs)
+                    # when a program is active, so if for some reason we were loaded with missing data reload it
+                    if not self.available_programs or len(self.available_programs) < 2:
+                        try:
+                            await self.async_fetch_data(include_static_data=True)
+                            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
+                        except:
+                            pass
+
+            if self.selected_program and key in self.selected_program.options:
+                self.selected_program.options[key].value = value
+            if self.active_program and key in self.active_program.options:
+                self.active_program.options[key].value = value
+            if key in self.status:
+                self.status[key] = value
+            if key in self.settings:
+                self.settings[key].value = value
+
+        await self._homeconnect._callbacks.async_broadcast_event(self, key, value)
 
     def register_callback(self, callback:Callable[[Appliance, str, any], None], keys:str|Sequence[str] ) -> None:
         """ Register a callback to be called when an update is received for the specified keys
@@ -345,7 +400,11 @@ class Appliance():
             await asyncio.sleep(delay)
         try:
             if include_static_data:
-                self.available_programs = await self._async_fetch_programs('available')
+                available_programs = await self._async_fetch_programs('available')
+                if available_programs and (not self.available_programs or len(available_programs)<2):
+                    # Only update the available programs if we got new data
+                    self.available_programs = available_programs
+
             self.selected_program = await self._async_fetch_programs('selected')
             self.active_program = await self._async_fetch_programs('active')
             self.settings = await self._async_fetch_settings()
@@ -369,54 +428,20 @@ class Appliance():
                 delay = delay + 60 if delay<300 else 300
                 self._wait_for_device_task = asyncio.create_task(self.async_fetch_data(include_static_data, delay=delay))
 
-    async def async_update_data(self, key:str, value) -> None:
-        """ Update the appliance data model from a change event notification """
-
-        if key == 'BSH.Common.Root.SelectedProgram':
-            self.selected_program = await self._async_fetch_programs('selected')
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif key == 'BSH.Common.Root.ActiveProgram':
-            self.active_program = await self._async_fetch_programs('active')
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
-        else:
-            if key == 'BSH.Common.Status.OperationState':
-                if value == 'BSH.Common.EnumType.OperationState.Finished':
-                    self.active_program = None
-                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
-                elif value == 'BSH.Common.EnumType.OperationState.Ready':
-                    # Workaround for the fact the API doesn't provide all the data (such as available programs)
-                    # when a program is active, so if for some reason we were loaded with missing data reload it
-                    if not self.available_programs or len(self.available_programs) < 2:
-                        try:
-                            await self.async_fetch_data(include_static_data=True)
-                            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
-                        except:
-                            pass
-
-            if self.selected_program and key in self.selected_program.options:
-                self.selected_program.options[key].value = value
-            if self.active_program and key in self.active_program.options:
-                self.active_program.options[key].value = value
-            if key in self.status:
-                self.status[key] = value
-            if key in self.settings:
-                self.settings[key].value = value
-
-        await self._homeconnect._callbacks.async_broadcast_event(self, key, value)
-
 
     async def _async_fetch_programs(self, program_type:str):
         """ Main function to fetch the different kinds of programs with their options from the cloud service """
         endpoint = f'{self._base_endpoint}/programs/{program_type}'
         response = await self._homeconnect._api.async_get(endpoint)
-        if response.status == 404 or response.error_key == "SDK.Error.UnsupportedOperation":
+        if response.error_key:
+            _LOGGER.debug("Failed to load Programs: %s with error code=%d key=%s", program_type, response.status, response.error_key)
             return None
         elif not response.data:
+            _LOGGER.debug("Didn't get any data for Programs: %s", program_type)
             raise HomeConnectError(msg=f"Failed to get a valid response from the Home Connect service ({response.status})", response=response)
         data = response.data
 
-        programs = {}
+        programs = ProgramsDict()
         if 'programs' not in data:
             # When fetching selected and active programs the parent program node doesn't exist so we force it
             data = { 'programs': [ data ] }
@@ -425,35 +450,52 @@ class Appliance():
             prog = Program.create(p)
             if 'options' in p:
                 options = self.optionlist_to_dict(p['options'])
+                _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, prog.key)
             else:
                 options = await self._async_fetch_options(program_type, p['key'])
             prog.options = options
 
             programs[p['key']] = prog
 
+
         if program_type in ['selected', 'active'] and len(programs)==1:
+            _LOGGER.debug("Loaded data for %s Program", program_type)
             return list(programs.values())[0]
         else:
+            _LOGGER.debug("Loaded %d available Programs", len(programs))
             return programs
 
     async def _async_fetch_status(self):
         """ Fetch the appliance status values """
         endpoint = f'{self._base_endpoint}/status'
         response = await self._homeconnect._api.async_get(endpoint)
+        if response.error_key:
+            _LOGGER.debug("Failed to load Status with error code=%d key=%s", response.status, response.error_key)
+            return {}
         data = response.data
-        if data is None or 'status' not in data: return {}
+        if data is None or 'status' not in data:
+            _LOGGER.debug("Didn't get any data for Status")
+            return {}
+
 
         res = {}
         for status in data['status']:
             res[status['key']] = status['value']
+
+        _LOGGER.debug("Loaded data for Status")
         return res
 
     async def _async_fetch_settings(self):
         """ Fetch the appliance settings """
         endpoint = f'{self._base_endpoint}/settings'
         response = await self._homeconnect._api.async_get(endpoint)
+        if response.error_key:
+            _LOGGER.debug("Failed to load Settings with error code=%d key=%s", response.status, response.error_key)
+            return {}
         data = response.data
-        if data is None or 'settings' not in data: return {}
+        if data is None or 'settings' not in data:
+            _LOGGER.debug("Didn't get any data for Settings")
+            return {}
 
         settings = {}
         for setting in data['settings']:
@@ -462,23 +504,34 @@ class Appliance():
             if response.status != 200:
                 continue
             settings[setting['key']] = Option.create(response.data)
+        _LOGGER.debug("Loaded data for Settings")
         return settings
 
     async def _async_fetch_options(self, program_type:str, program_key:str=None):
         """ Fetch detailed options of a program """
 
-        if True or program_type=='available':
+        # TODO: The program_type is not really used so it may make sense to clean this code up
+        if program_type=='available':
             endpoint = f"{self._base_endpoint}/programs/available/{program_key}"
         else:
             endpoint = f"{self._base_endpoint}/programs/{program_type}/options"
 
         response = await self._homeconnect._api.async_get(endpoint)      # This is expected to always succeed if the previous call succeeds
+        if response.error_key:
+            _LOGGER.debug("Failed to load Options of %s/%s with error code=%d key=%s", program_type, program_key, response.status, response.error_key)
+            return None
         data = response.data
         if data is None or 'options' not in data:
+            _LOGGER.debug("Didn't get any data for Options of %s/%s", program_type, program_key)
             return None
 
-        if True or program_type=='avilable':
-            return self.optionlist_to_dict(data['options'])
+
+        options = self.optionlist_to_dict(data['options'])
+        _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, program_key)
+        return options
+
+        # if program_type=='avilable':
+        #     return self.optionlist_to_dict(data['options'])
         # else:
         #     options = {}
         #     for option in data['options']:
