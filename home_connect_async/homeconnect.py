@@ -146,7 +146,8 @@ class HomeConnect(DataClassJsonMixin):
             else:
                 response = await self._api.async_get('/api/homeappliances')
                 if response.status != 200:
-                    raise HomeConnectError(f"Failed to get a valid response from the Home Connect server ({response.status})", response=response)
+                    _LOGGER.warning("Failed to get the list of appliances code=%d error=%s", response.status, response.error_key)
+                    raise HomeConnectError(f"Failed to get the list of appliances (code={response.status})", response=response)
                 data = response.data
 
                 haid_list = []

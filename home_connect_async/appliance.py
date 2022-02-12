@@ -4,13 +4,13 @@ import json
 import logging
 from collections.abc import Sequence, Callable
 from dataclasses import dataclass, field
-from typing import Optional, overload
+from typing import Optional
 import typing
 from dataclasses_json import dataclass_json, Undefined, config
 
 import home_connect_async.homeconnect as homeconnect
 from .const import Events
-from .common import DeviceOfflineError, HomeConnectError
+from .common import HomeConnectError
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -314,24 +314,33 @@ class Appliance():
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key == 'BSH.Common.Root.ActiveProgram':
             self.active_program = await self._async_fetch_programs('active')
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
-        else:
-            if key == 'BSH.Common.Status.OperationState':
-                if value == 'BSH.Common.EnumType.OperationState.Finished':
-                    self.active_program = None
-                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
+            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif key == 'BSH.Common.Event.ProgramFinished':
+            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
+        elif key == 'BSH.Common.Status.OperationState':
+            is_new_state = self.status.get('BSH.Common.Status.OperationState') != value
+            self.status[key] = value
+            # if value == 'BSH.Common.EnumType.OperationState.Finished':
+            #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
+            #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            if value == 'BSH.Common.EnumType.OperationState.Ready':
+                # Workaround for the fact the API doesn't provide all the data (such as available programs)
+                # when a program is active, so if for some reason we were loaded with missing data reload it
+                old_available_programs_count = len(self.available_programs) if self.available_programs else 0
+                try:
+                    await self.async_fetch_data(include_static_data=True)
+                except HomeConnectError:
+                    pass
+                if old_available_programs_count != len(self.available_programs):
+                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
+                if is_new_state:
                     await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-                elif value == 'BSH.Common.EnumType.OperationState.Ready':
-                    # Workaround for the fact the API doesn't provide all the data (such as available programs)
-                    # when a program is active, so if for some reason we were loaded with missing data reload it
-                    if not self.available_programs or len(self.available_programs) < 2:
-                        try:
-                            await self.async_fetch_data(include_static_data=True)
-                            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
-                        except:
-                            pass
-
+                # if not self.available_programs or len(self.available_programs) < 2:
+                #     await self.async_fetch_data(include_static_data=True)
+                #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
+        else:
+            # update options, statuses and settings in the data model
             if self.selected_program and key in self.selected_program.options:
                 self.selected_program.options[key].value = value
             if self.active_program and key in self.active_program.options:
@@ -397,8 +406,10 @@ class Appliance():
         """
 
         if delay>0:
+            _LOGGER.debug("Sleeping for %ds before starting to load appliance data for %s (%s)", delay, self.name, self.haId )
             await asyncio.sleep(delay)
         try:
+            _LOGGER.debug("Starting to load appliance data for %s (%s)", self.name, self.haId)
             if include_static_data:
                 available_programs = await self._async_fetch_programs('available')
                 if available_programs and (not self.available_programs or len(available_programs)<2):
@@ -410,24 +421,20 @@ class Appliance():
             self.settings = await self._async_fetch_settings()
             self.status = await self._async_fetch_status()
 
+            _LOGGER.debug("Finished loading appliance data for %s (%s)", self.name, self.haId)
             if not self.connected:
                 await self.async_set_connection_state(True)
             else:
                 await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-
-        except DeviceOfflineError:
-            # sometime devices are offline despite the appliance being listed as connected so no event is sent when the device goes online again
-            # so we mark the appliance as not connected and keep retrying until we get the data
-            await self.async_set_connection_state(False)
-            delay = delay + 60 if delay<300 else 300
-            self._wait_for_device_task = asyncio.create_task(self.async_fetch_data(include_static_data, delay=delay))
-
         except HomeConnectError as ex:
-            if ex.error_key and ex.error_key.startswith("SDK.Error."):
-                await self.async_set_connection_state(False)
+            if ex.error_key:
                 delay = delay + 60 if delay<300 else 300
+                _LOGGER.debug("Got an error loading appliance data for %s (%s) code=%d error=%s - will retry in %ds", self.name, self.haId, ex.code, ex.error_key, delay)
+                await self.async_set_connection_state(False)
                 self._wait_for_device_task = asyncio.create_task(self.async_fetch_data(include_static_data, delay=delay))
-
+        except Exception as ex:
+            _LOGGER.debug("Unexpected exception in Appliance.async_fetch_data", exc_info=ex)
+            raise HomeConnectError("Unexpected exception in Appliance.async_fetch_data", inner_exception=ex)
 
     async def _async_fetch_programs(self, program_type:str):
         """ Main function to fetch the different kinds of programs with their options from the cloud service """

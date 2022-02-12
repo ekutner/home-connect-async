@@ -17,8 +17,4 @@ class HomeConnectError(Exception):
 
         super().__init__(msg, code, self.error_key, self.error_description, inner_exception)
 
-class DeviceOfflineError(HomeConnectError):
-    """ Exception for offline device that is still reported as connected by the API """
-    def __init__(self, msg: str = None, code: int = None, response=None):
-        super().__init__(msg, code, response)
 

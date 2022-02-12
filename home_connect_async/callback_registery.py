@@ -44,12 +44,14 @@ class CallbackRegistry():
         for key in keys:
             if '*' in key:
                 callback_record = {
-                    "key": re.compile(fnmatch.translate(key), re.IGNORECASE),
+                    "key": key,
+                    "regex": re.compile(fnmatch.translate(key), re.IGNORECASE),
                     "callback": callback
                 }
                 if self.WILDCARD_KEY not in self._callbacks[haid]:
                     self._callbacks[haid][self.WILDCARD_KEY] = []
-                self._callbacks[haid][self.WILDCARD_KEY].append(callback_record)
+                if not self.wildcard_registered(callback_record, self._callbacks[haid][self.WILDCARD_KEY]):
+                    self._callbacks[haid][self.WILDCARD_KEY].append(callback_record)
             else:
                 if key not in self._callbacks[haid]:
                     self._callbacks[haid][key] = set()
@@ -72,19 +74,19 @@ class CallbackRegistry():
 
         for key in keys:
             if '*' in key:
-                callback_record = {
-                    "key": re.compile(fnmatch.translate(key), re.IGNORECASE),
-                    "callback": callback
-                }
-                try:
-                    if haid in self._callbacks and self.WILDCARD_KEY in self._callbacks[haid]:
-                        self._callbacks[haid][self.WILDCARD_KEY].remove(callback_record)
-                except ValueError:
-                    # ignore if the value is not found in the list
-                    pass
+                if haid in self._callbacks and self.WILDCARD_KEY in self._callbacks[haid]:
+                    new_list = [ item for item in self._callbacks[haid][self.WILDCARD_KEY] if item['key'] != key or item['callback'] != callback]
+                    self._callbacks[haid][self.WILDCARD_KEY] = new_list
             else:
                 if haid in self._callbacks and key in self._callbacks[haid]:
                     self._callbacks[haid][key].remove(callback)
+
+    def wildcard_registered(self,  callback_record, callback_list) -> bool:
+        """ Checks if the key and callback pair are already in the list of callbacks """
+        for item in callback_list:
+            if item['key'] == callback_record['key'] and item['callback'] == callback_record['callback']:
+                return True
+        return False
 
     def clear_all_callbacks(self):
         """ Clear all the registered callbacks """
@@ -105,7 +107,8 @@ class CallbackRegistry():
         haid = appliance.haId
 
         # dispatch simple event callbacks
-        for haid in [ handler for handler in [None, appliance.haId] if handler in self._callbacks] :
+        handlers = [ handler for handler in [None, appliance.haId] if handler in self._callbacks]
+        for haid in handlers:
             if event_key in self._callbacks[haid]:
                 for callback in self._callbacks[haid][event_key]:
                     await self._async_call(callback, appliance, event_key, value)
@@ -114,7 +117,7 @@ class CallbackRegistry():
             # dispatch wildcard or value based callbacks
             if self.WILDCARD_KEY in self._callbacks[haid]:
                 for callback_record in self._callbacks[haid][self.WILDCARD_KEY]:
-                    if callback_record["key"].fullmatch(event_key):
+                    if callback_record["regex"].fullmatch(event_key):
                         callback = callback_record['callback']
                         await self._async_call(callback, appliance, event_key, value)
                         handled = True

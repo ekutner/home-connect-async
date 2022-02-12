@@ -6,7 +6,7 @@ from collections.abc import Callable
 from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
-from .common import HomeConnectError, DeviceOfflineError
+from .common import HomeConnectError
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,21 +60,22 @@ class HomeConnectApi():
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
                     await asyncio.sleep(int(wait_time)+1)
-                elif response.status == 401 or response.status >= 500: # Unauthorized
-                    # This is probably caused by an expires token so the next retry will get a new one automatically
-                    pass
-                elif not response.content_length:
+                elif method in ["put", "delete"] and response.status == 204:
                     result = self.ApiResponse(response, None)
                     return result
                 else:
-                    result = self.ApiResponse(response, await response.json())
-                    if result.error_key == "SDK.Error.HomeAppliance.Connection.Initialization.Failed":
-                        raise DeviceOfflineError(result.error_description, response=result)
-                    return result
+                    result = self.ApiResponse(response,  await response.json())
+                    if result.status == 401 or result.status >= 500: # Unauthorized or service error
+                        # This is probably caused by an expired token so the next retry will get a new one automatically
+                        _LOGGER.debug("API got error code=%d key=%s - %d retries left", response.status, result.error_key, retry)
+                    else:
+                        if result.error:
+                            _LOGGER.debug("API call failed with code=%d error=%s", response.status, result.error_key)
+                        return result
             except Exception as ex:
-                _LOGGER.debug("Unexpected exeption when calling HomeConnect service", exc_info=ex)
+                _LOGGER.debug("API call to HomeConnect service failed", exc_info=ex)
                 if not retry:
-                    raise HomeConnectError("Unexpected exception when calling HomeConnect service", code=901, inner_exception=ex) from ex
+                    raise HomeConnectError("API call to HomeConnect service failed", code=901, inner_exception=ex) from ex
             finally:
                 if response:
                     response.close()
