@@ -296,7 +296,7 @@ class HomeConnect(DataClassJsonMixin):
         if event.type == 'KEEP-ALIVE':
             self._last_update = datetime.now()
         elif event.type == 'PAIRED':
-            self.appliances[haid] = await Appliance.async_create(self._api, haId=haid)
+            self.appliances[haid] = await Appliance.async_create(self, haId=haid)
             await self._callbacks.async_broadcast_event(self.appliances[haid],  Events.PAIRED)
         elif event.type == 'DEPAIRED':
             if haid in self.appliances:
@@ -311,7 +311,7 @@ class HomeConnect(DataClassJsonMixin):
                 await self.appliances[haid].async_set_connection_state(True)
                 await self._callbacks.async_broadcast_event(self.appliances[haid], Events.CONNECTED)
             else:
-                self.appliances[haid] = await Appliance.async_create(self._api, haId=haid)
+                self.appliances[haid] = await Appliance.async_create(self, haId=haid)
                 await self._callbacks.async_broadcast_event(self.appliances[haid], Events.PAIRED)
         else:
             # Type is NOTIFY or EVENT
