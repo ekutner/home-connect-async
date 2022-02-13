@@ -3,7 +3,7 @@ from distutils.core import setup
 setup(
     name = 'home-connect-async',
     packages = ['home_connect_async'],
-    version = '0.4.7',
+    version = '0.4.8',
     license='MIT',
     description = 'Async SDK for BSH Home Connect API',
     author = 'Eran Kutner',
@@ -12,9 +12,9 @@ setup(
     keywords = ['HomeConnect', 'Home Connect', 'BSH', 'Async', 'SDK'],
     install_requires=[
         'aiohttp',
-        'aiohttp-sse-client',
-        'dataclasses-json',
-        'oauth2-client',
+        'aiohttp-sse-client>=0.2.1',
+        'dataclasses-json>=0.5.6',
+        'oauth2-client>=1.2.1',
         'cchardet'
     ],
     classifiers=[
