@@ -1,4 +1,4 @@
-name: "tagged-release"
+name: "Auto Release on Tag"
 
 on:
   push:
