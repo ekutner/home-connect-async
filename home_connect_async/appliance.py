@@ -342,12 +342,16 @@ class Appliance():
         else:
             # update options, statuses and settings in the data model
             if self.selected_program and key in self.selected_program.options:
-                self.selected_program.options[key].value = value
+                # self.selected_program.options[key].value = value
+                self.selected_program = await self._async_fetch_programs('selected')
+                #self.selected_program.options[key].value = value
             if self.active_program and key in self.active_program.options:
-                self.active_program.options[key].value = value
+                #self.active_program.options[key].value = value
+                self.active_program = await self._async_fetch_programs('active')
             if key in self.status:
                 self.status[key] = value
             if key in self.settings:
+                #self.settings = await self._async_fetch_settings()
                 self.settings[key].value = value
 
         await self._homeconnect._callbacks.async_broadcast_event(self, key, value)
