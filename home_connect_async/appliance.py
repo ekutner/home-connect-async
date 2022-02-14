@@ -4,6 +4,7 @@ import json
 import logging
 from collections.abc import Sequence, Callable
 from dataclasses import dataclass, field
+import re
 from typing import Optional
 import typing
 from dataclasses_json import dataclass_json, Undefined, config
@@ -125,17 +126,22 @@ class ProgramsDict(dict[str, Program]):
 
         return super().__getitem__(__k)
 
-    def get(self, __key:str, __default=None):
-        key = self.contained_subkey(__key)
+    def get(self, __key:str, __default=None, exact:bool=False):
+        key = self.contained_subkey(__key, exact)
         if key:
             return super().get(key)
         return __default
 
-    def contained_subkey(self, key) -> str|None:
+    def contains(self, key: _KT, exact:bool=False):
+        k = self.contained_subkey(key, exact)
+        return k is not None
+
+    def contained_subkey(self, key, exact:bool=False) -> str|None:
         """ Get the longest valid subkey of the the passed key which is contained
         in the dictionary or None if no such subkey exists"""
+        try_subkeys = 1 if  exact else 2
         key_parts = key.split('.')
-        for l in range(len(key_parts), len(key_parts)-2, -1):
+        for l in range(len(key_parts), len(key_parts)-try_subkeys, -1):
             subkey = '.'.join(key_parts[:l])
             if super().__contains__(subkey):
                 return subkey
@@ -153,7 +159,8 @@ class Appliance():
     enumber:str
     haId:str
     uri:str
-    available_programs:Optional[ProgramsDict[str,Program]] = None
+    #available_programs:Optional[ProgramsDict[str,Program]] = None
+    available_programs:Optional[dict[str,Program]] = None
     active_program:Optional[Program] = None
     selected_program:Optional[Program] = None
     status:dict[str, any] = None
@@ -195,7 +202,7 @@ class Appliance():
 
         return await self._async_set_program(key, options, 'selected')
 
-    async def async_start_program(self, key:str=None, options:Sequence[dict]=None, program:Program=None) -> bool:
+    async def async_start_program(self, program_key:str=None, options:Sequence[dict]=None, program:Program=None) -> bool:
         """ Started the specified program
 
         Parameters:
@@ -204,21 +211,26 @@ class Appliance():
         program: A Program object that represents the selected program. If used then "key" is ignored.
         """
         if program is not None:
-            key = program.key
+            program_key = program.key
 
-        if key is None and self.selected_program is not None:
-            key = self.selected_program.key
+        if program_key is None and self.selected_program is not None:
+            program_key = self.selected_program.key
         else:
             _LOGGER.error('Either "program" or "key" must be specified')
             return False
 
-        if options is None and self.selected_program is not None:
+        if not self.available_programs or not self.available_programs.contains(program_key):
+            _LOGGER.warning("The selected program in not one of the available programs (not supported by the API)")
+            return False
+
+        if options is None and self.selected_program and self.available_programs:
             options = []
             for opt in self.selected_program.options.values():
-                option = { "key": opt.key, "value": opt.value}
-                options.append(option)
+                if opt.key in self.available_programs[program_key].options:
+                    option = { "key": opt.key, "value": opt.value}
+                    options.append(option)
 
-        return await self._async_set_program(key, options, 'active')
+        return await self._async_set_program(program_key, options, 'active')
 
     async def async_stop_active_program(self) -> bool:
         """ Stop the active program """
@@ -274,7 +286,7 @@ class Appliance():
     async def _async_set_program(self, key, options:Sequence[dict], mode:str) -> bool:
         """ Main function to handle all scenarions of setting a program """
         url = f'{self._base_endpoint}/programs/{mode}'
-        if options is not None and not isinstance(options, list):
+        if options and not isinstance(options, list):
             options = [ options ]
 
         command = {
@@ -283,17 +295,28 @@ class Appliance():
                 "options": []
             }
         }
-        if options:
-            command['data']['options'] = options
+        retry = True
+        while retry:
+            if options:
+                command['data']['options'] = options
 
-        jscmd = json.dumps(command)
-        response = await self._homeconnect._api.async_put(url, jscmd)
-        if response.status == 204:
-            return True
-        elif response.error_description:
+            jscmd = json.dumps(command)
+            response = await self._homeconnect._api.async_put(url, jscmd)
+            if response.status == 204:
+                return True
+            elif response.error_key == "SDK.Error.UnsupportedOption":
+                m = re.fullmatch("Option ([^ ]*) not supported", response.error_description)
+                if m:
+                    bad_option = m.group(1)
+                    options = [option for option in options if option['key']!= bad_option]
+                else:
+                    retry = False
+            else:
+                retry = False
+
+        if response.error_description:
             raise HomeConnectError(response.error_description, response=response)
         raise HomeConnectError("Failed to set program ({response.status})", response=response)
-
 
 
     async def async_set_connection_state(self, connected:bool):
