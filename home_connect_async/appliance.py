@@ -106,46 +106,46 @@ class Program():
         return self
 
 
-_KT = typing.TypeVar("_KT") #  key type
-_VT = typing.TypeVar("_VT") #  value type
-class ProgramsDict(dict[str, Program]):
-    """ A custom dictionary class to handle undocumented program keys that have sub-keys """
-    def __contains__(self, key: str) -> bool:
-        if not super().__contains__(key) and isinstance(key, str):
-            key_parts = key.split('.')
-            if super().__contains__('.'.join(key_parts[:-1])):
-                return True
-        return super().__contains__(key)
+# _KT = typing.TypeVar("_KT") #  key type
+# _VT = typing.TypeVar("_VT") #  value type
+# class ProgramsDict(dict[str, Program]):
+#     """ A custom dictionary class to handle undocumented program keys that have sub-keys """
+#     def __contains__(self, key: str) -> bool:
+#         if not super().__contains__(key) and isinstance(key, str):
+#             key_parts = key.split('.')
+#             if super().__contains__('.'.join(key_parts[:-1])):
+#                 return True
+#         return super().__contains__(key)
 
-    def __getitem__(self, __k: _KT) -> _VT:
-        if not super().__contains__(__k) and isinstance(__k, str):
-            key_parts = __k.split('.')
-            subkey = '.'.join(key_parts[:-1])
-            if super().__contains__(subkey):
-                return super().__getitem__(subkey)
+#     def __getitem__(self, __k: _KT) -> _VT:
+#         if not super().__contains__(__k) and isinstance(__k, str):
+#             key_parts = __k.split('.')
+#             subkey = '.'.join(key_parts[:-1])
+#             if super().__contains__(subkey):
+#                 return super().__getitem__(subkey)
 
-        return super().__getitem__(__k)
+#         return super().__getitem__(__k)
 
-    def get(self, __key:str, __default=None, exact:bool=False):
-        key = self.contained_subkey(__key, exact)
-        if key:
-            return super().get(key)
-        return __default
+#     def get(self, __key:str, __default=None, exact:bool=False):
+#         key = self.contained_subkey(__key, exact)
+#         if key:
+#             return super().get(key)
+#         return __default
 
-    def contains(self, key: _KT, exact:bool=False):
-        k = self.contained_subkey(key, exact)
-        return k is not None
+#     def contains(self, key: _KT, exact:bool=False):
+#         k = self.contained_subkey(key, exact)
+#         return k is not None
 
-    def contained_subkey(self, key, exact:bool=False) -> str|None:
-        """ Get the longest valid subkey of the the passed key which is contained
-        in the dictionary or None if no such subkey exists"""
-        try_subkeys = 1 if  exact else 2
-        key_parts = key.split('.')
-        for l in range(len(key_parts), len(key_parts)-try_subkeys, -1):
-            subkey = '.'.join(key_parts[:l])
-            if super().__contains__(subkey):
-                return subkey
-        return None
+#     def contained_subkey(self, key, exact:bool=False) -> str|None:
+#         """ Get the longest valid subkey of the the passed key which is contained
+#         in the dictionary or None if no such subkey exists"""
+#         try_subkeys = 1 if  exact else 2
+#         key_parts = key.split('.')
+#         for l in range(len(key_parts), len(key_parts)-try_subkeys, -1):
+#             subkey = '.'.join(key_parts[:l])
+#             if super().__contains__(subkey):
+#                 return subkey
+#         return None
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
@@ -165,6 +165,7 @@ class Appliance():
     selected_program:Optional[Program] = None
     status:dict[str, any] = None
     settings:dict[str, Option] = None
+    commands:dict[str, any] = None
 
     # Internal fields
     #_api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
@@ -219,7 +220,7 @@ class Appliance():
             _LOGGER.error('Either "program" or "key" must be specified')
             return False
 
-        if not self.available_programs or not self.available_programs.contains(program_key):
+        if not self.available_programs or program_key not in self.available_programs:
             _LOGGER.warning("The selected program in not one of the available programs (not supported by the API)")
             return False
 
@@ -245,28 +246,40 @@ class Appliance():
             raise HomeConnectError("Failed to stop the program ({response.status})", response=response)
         return False
 
-    async def async_set_option(self, key, value) -> bool:
+    async def async_pause_active_program(self):
+        """ Pause the active program """
+        if "BSH.Common.Command.PauseProgram" in self.commands \
+            and self.status.get("BSH.Common.Status.OperationState") == "BSH.Common.EnumType.OperationState.Run":
+            return await self.async_send_command("BSH.Common.Command.PauseProgram", True)
+        return False
+
+    async def async_resume_paused_program(self):
+        """ Resume a paused program """
+        if "BSH.Common.Command.ResumeProgram" in self.commands \
+            and self.status.get("BSH.Common.Status.OperationState") == "BSH.Common.EnumType.OperationState.Pause":
+            return await self.async_send_command("BSH.Common.Command.ResumeProgram", True)
+        return False
+
+    async def async_send_command(self, command_key:str, value:any) -> bool:
+        """ Stop the active program """
+        return await self._async_set_service_value("commands", command_key, value)
+
+    async def async_set_option(self, option_key, value) -> bool:
         """ Set a value for a specific program option """
-        url = f'{self._base_endpoint}/programs/selected/options/{key}'
+        return await self._async_set_service_value("options", option_key, value)
 
-        command = {
-            "data": {
-                "key": key,
-                "value": value
-            }
-        }
-        jscmd = json.dumps(command)
-        response = await self._homeconnect._api.async_put(url, jscmd)
-        if response.status == 204:
-            return True
-        elif response.error_description:
-            raise HomeConnectError(response.error_description, response=response)
-        raise HomeConnectError("Failed to set option ({response.status})", response=response)
-
-
-    async def async_apply_setting(self, key, value):
+    async def async_apply_setting(self, setting_key, value) -> bool:
         """ Apply a global appliance setting """
-        url = f'{self._base_endpoint}/settings/{key}'
+        return await self._async_set_service_value("settings", setting_key, value)
+
+    async def _async_set_service_value(self, service_type:str, key:str, value:any) -> bool:
+        """ Helper function to set key/value type service properties """
+        if service_type in ['settings', 'commands']:
+            endpoint = f'{self._base_endpoint}/{service_type}/{key}'
+        elif service_type == 'options':
+            endpoint = f'{self._base_endpoint}/programs/selected/options/{key}'
+        else:
+            raise ValueError(f"Unsupported service_type value: {service_type}")
 
         command = {
             "data": {
@@ -275,13 +288,12 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command)
-        response = await self._homeconnect._api.async_put(url, jscmd)
+        response = await self._homeconnect._api.async_put(endpoint, jscmd)
         if response.status == 204:
             return True
         elif response.error_description:
             raise HomeConnectError(response.error_description, response=response)
-        raise HomeConnectError("Failed to apply setting ({response.status})", response=response)
-
+        raise HomeConnectError("Failed to set service value ({response.status})", response=response)
 
     async def _async_set_program(self, key, options:Sequence[dict], mode:str) -> bool:
         """ Main function to handle all scenarions of setting a program """
@@ -337,9 +349,11 @@ class Appliance():
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key == 'BSH.Common.Root.ActiveProgram':
             self.active_program = await self._async_fetch_programs('active')
+            self.commands = await self._async_fetch_commands()  # Just for the chance we would get a different result when a program is active
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key == 'BSH.Common.Event.ProgramFinished':
+            self.commands = await self._async_fetch_commands()  # Just for the chance we would get a different result when a program is inactive
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
         elif key == 'BSH.Common.Status.OperationState':
             is_new_state = self.status.get('BSH.Common.Status.OperationState') != value
@@ -348,6 +362,7 @@ class Appliance():
             #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
             #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
             if value == 'BSH.Common.EnumType.OperationState.Ready':
+                self.commands = await self._async_fetch_commands()  # Just for the chance we would get a different result when a program is inactive
                 # Workaround for the fact the API doesn't provide all the data (such as available programs)
                 # when a program is active, so if for some reason we were loaded with missing data reload it
                 old_available_programs_count = len(self.available_programs) if self.available_programs else 0
@@ -357,8 +372,8 @@ class Appliance():
                     pass
                 if old_available_programs_count != len(self.available_programs):
                     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
-                if is_new_state:
-                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            if is_new_state:
+                await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
                 # if not self.available_programs or len(self.available_programs) < 2:
                 #     await self.async_fetch_data(include_static_data=True)
                 #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
@@ -442,6 +457,7 @@ class Appliance():
                 if available_programs and (not self.available_programs or len(available_programs)<2):
                     # Only update the available programs if we got new data
                     self.available_programs = available_programs
+                    self.commands = await self._async_fetch_commands()
 
             self.selected_program = await self._async_fetch_programs('selected')
             self.active_program = await self._async_fetch_programs('active')
@@ -475,7 +491,8 @@ class Appliance():
             raise HomeConnectError(msg=f"Failed to get a valid response from the Home Connect service ({response.status})", response=response)
         data = response.data
 
-        programs = ProgramsDict()
+        #programs = ProgramsDict()
+        programs = {}
         if 'programs' not in data:
             # When fetching selected and active programs the parent program node doesn't exist so we force it
             data = { 'programs': [ data ] }
@@ -498,48 +515,6 @@ class Appliance():
         else:
             _LOGGER.debug("Loaded %d available Programs", len(programs))
             return programs
-
-    async def _async_fetch_status(self):
-        """ Fetch the appliance status values """
-        endpoint = f'{self._base_endpoint}/status'
-        response = await self._homeconnect._api.async_get(endpoint)
-        if response.error_key:
-            _LOGGER.debug("Failed to load Status with error code=%d key=%s", response.status, response.error_key)
-            return {}
-        data = response.data
-        if data is None or 'status' not in data:
-            _LOGGER.debug("Didn't get any data for Status")
-            return {}
-
-
-        res = {}
-        for status in data['status']:
-            res[status['key']] = status['value']
-
-        _LOGGER.debug("Loaded data for Status")
-        return res
-
-    async def _async_fetch_settings(self):
-        """ Fetch the appliance settings """
-        endpoint = f'{self._base_endpoint}/settings'
-        response = await self._homeconnect._api.async_get(endpoint)
-        if response.error_key:
-            _LOGGER.debug("Failed to load Settings with error code=%d key=%s", response.status, response.error_key)
-            return {}
-        data = response.data
-        if data is None or 'settings' not in data:
-            _LOGGER.debug("Didn't get any data for Settings")
-            return {}
-
-        settings = {}
-        for setting in data['settings']:
-            endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
-            response = await self._homeconnect._api.async_get(endpoint)
-            if response.status != 200:
-                continue
-            settings[setting['key']] = Option.create(response.data)
-        _LOGGER.debug("Loaded data for Settings")
-        return settings
 
     async def _async_fetch_options(self, program_type:str, program_key:str=None):
         """ Fetch detailed options of a program """
@@ -574,6 +549,68 @@ class Appliance():
         #         o = Option.create(response.data)
         #         options[o.key] = o
         #     return options
+
+    async def _async_fetch_status(self):
+        """ Fetch the appliance status values """
+        endpoint = f'{self._base_endpoint}/status'
+        response = await self._homeconnect._api.async_get(endpoint)
+        if response.error_key:
+            _LOGGER.debug("Failed to load Status with error code=%d key=%s", response.status, response.error_key)
+            return {}
+        data = response.data
+        if data is None or 'status' not in data:
+            _LOGGER.debug("Didn't get any data for Status")
+            return {}
+
+        statuses = {}
+        for status in data['status']:
+            statuses[status['key']] = status['value']
+
+        _LOGGER.debug("Loaded %d Statuses", len(statuses))
+        return statuses
+
+
+    async def _async_fetch_settings(self):
+        """ Fetch the appliance settings """
+        endpoint = f'{self._base_endpoint}/settings'
+        response = await self._homeconnect._api.async_get(endpoint)
+        if response.error_key:
+            _LOGGER.debug("Failed to load Settings with error code=%d key=%s", response.status, response.error_key)
+            return {}
+        data = response.data
+        if data is None or 'settings' not in data:
+            _LOGGER.debug("Didn't get any data for Settings")
+            return {}
+
+        settings = {}
+        for setting in data['settings']:
+            endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
+            response = await self._homeconnect._api.async_get(endpoint)
+            if response.status != 200:
+                continue
+            settings[setting['key']] = Option.create(response.data)
+        _LOGGER.debug("Loaded %d Settings", len(settings))
+        return settings
+
+
+    async def _async_fetch_commands(self):
+        """ Fetch the appliance commands """
+        endpoint = f'{self._base_endpoint}/commands'
+        response = await self._homeconnect._api.async_get(endpoint)
+        if response.error_key:
+            _LOGGER.debug("Failed to load Settings with error code=%d key=%s", response.status, response.error_key)
+            return {}
+        data = response.data
+        if data is None or 'commands' not in data:
+            _LOGGER.debug("Didn't get any data for Settings")
+            return {}
+
+        commands = {}
+        for command in data['commands']:
+            commands[command['key']] = command['description']
+
+        _LOGGER.debug("Loaded %d Commands", len(commands))
+        return commands
 
 
     def optionlist_to_dict(self, l:Sequence[dict]) -> dict:
