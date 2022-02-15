@@ -5,9 +5,7 @@ import logging
 from collections.abc import Sequence, Callable
 from dataclasses import dataclass, field
 import re
-from turtle import end_poly
 from typing import Optional
-import typing
 from dataclasses_json import dataclass_json, Undefined, config
 
 import home_connect_async.homeconnect as homeconnect
