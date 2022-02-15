@@ -5,6 +5,7 @@ import logging
 from collections.abc import Sequence, Callable
 from dataclasses import dataclass, field
 import re
+from turtle import end_poly
 from typing import Optional
 import typing
 from dataclasses_json import dataclass_json, Undefined, config
@@ -238,7 +239,9 @@ class Appliance():
         if self.active_program is None:
             await self.async_get_active_program()
         if self.active_program:
-            response = await self._homeconnect._api.async_delete(f'{self._base_endpoint}/programs/active')
+            endpoint = f'{self._base_endpoint}/programs/active'
+            _LOGGER.debug("Calling %s with delete verb", endpoint)
+            response = await self._homeconnect._api.async_delete(endpoint)
             if response.status == 204:
                 return True
             elif response.error_description:
@@ -287,7 +290,8 @@ class Appliance():
                 "value": value
             }
         }
-        jscmd = json.dumps(command)
+        jscmd = json.dumps(command, indent=2)
+        _LOGGER.debug("Calling %s with:\n%s", endpoint, jscmd)
         response = await self._homeconnect._api.async_put(endpoint, jscmd)
         if response.status == 204:
             return True
@@ -297,7 +301,7 @@ class Appliance():
 
     async def _async_set_program(self, key, options:Sequence[dict], mode:str) -> bool:
         """ Main function to handle all scenarions of setting a program """
-        url = f'{self._base_endpoint}/programs/{mode}'
+        endpoint = f'{self._base_endpoint}/programs/{mode}'
         if options and not isinstance(options, list):
             options = [ options ]
 
@@ -312,8 +316,9 @@ class Appliance():
             if options:
                 command['data']['options'] = options
 
-            jscmd = json.dumps(command)
-            response = await self._homeconnect._api.async_put(url, jscmd)
+            jscmd = json.dumps(command, indent=2)
+            _LOGGER.debug("Calling %s with:\n%s", endpoint, jscmd)
+            response = await self._homeconnect._api.async_put(endpoint, jscmd)
             if response.status == 204:
                 return True
             elif response.error_key == "SDK.Error.UnsupportedOption":
@@ -348,14 +353,17 @@ class Appliance():
             self.selected_program = await self._async_fetch_programs('selected')
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key == 'BSH.Common.Root.ActiveProgram':
-            self.active_program = await self._async_fetch_programs('active')
-            self.commands = await self._async_fetch_commands()  # Just for the chance we would get a different result when a program is active
+            # self.active_program = await self._async_fetch_programs('active')
+            # self.commands = await self._async_fetch_commands()
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            #await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key == 'BSH.Common.Event.ProgramFinished':
-            self.commands = await self._async_fetch_commands()  # Just for the chance we would get a different result when a program is inactive
+            self.commands = await self._async_fetch_commands()
             await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
         elif key == 'BSH.Common.Status.OperationState':
+            self.active_program = await self._async_fetch_programs('active')
+            self.commands = await self._async_fetch_commands()
+
             is_new_state = self.status.get('BSH.Common.Status.OperationState') != value
             self.status[key] = value
             # if value == 'BSH.Common.EnumType.OperationState.Finished':
@@ -607,7 +615,7 @@ class Appliance():
 
         commands = {}
         for command in data['commands']:
-            commands[command['key']] = command['description']
+            commands[command['key']] = command['name']
 
         _LOGGER.debug("Loaded %d Commands", len(commands))
         return commands
