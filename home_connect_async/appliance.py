@@ -17,6 +17,43 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
+class Status():
+    """ Class to represent a Home Connect Status """
+    key:str
+    name:Optional[str] = None
+    value:Optional[any] = None
+    displayvalue:Optional[str] = None
+
+    @classmethod
+    def create(cls, data:dict):
+        """ A factory to create a new instance from a dictionary in the Home Connect format """
+        status = Status(
+            key = data['key'],
+            name = data.get('name'),
+            value = data.get('value'),
+            displayvalue= data.get('displayvalue')
+        )
+        return status
+
+
+@dataclass_json(undefined=Undefined.EXCLUDE)
+@dataclass
+class Command():
+    """ Class to represent a Home Connect Command """
+    key:str
+    name:Optional[str] = None
+
+    @classmethod
+    def create(cls, data:dict):
+        """ A factory to create a new instance from a dictionary in the Home Connect format """
+        status = Command(
+            key = data['key'],
+            name = data.get('name'),
+        )
+        return status
+
+@dataclass_json(undefined=Undefined.EXCLUDE)
+@dataclass
 class Option():
     """ Class to represent a Home Connect Option """
     key:str
@@ -32,7 +69,7 @@ class Option():
 
     @classmethod
     def create(cls, data:dict):
-        """ A factory to create a new instance from a dictionary in the Home COnnect format """
+        """ A factory to create a new instance from a dictionary in the Home Connect format """
         option = Option(
             key = data['key'],
             type = data.get('type'),
@@ -105,6 +142,7 @@ class Program():
         return self
 
 
+
 # _KT = typing.TypeVar("_KT") #  key type
 # _VT = typing.TypeVar("_VT") #  value type
 # class ProgramsDict(dict[str, Program]):
@@ -162,9 +200,9 @@ class Appliance():
     available_programs:Optional[dict[str,Program]] = None
     active_program:Optional[Program] = None
     selected_program:Optional[Program] = None
-    status:dict[str, any] = None
+    status:dict[str, Status] = None
     settings:dict[str, Option] = None
-    commands:dict[str, any] = None
+    commands:dict[str, Command] = None
 
     # Internal fields
     #_api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
@@ -250,14 +288,16 @@ class Appliance():
     async def async_pause_active_program(self):
         """ Pause the active program """
         if "BSH.Common.Command.PauseProgram" in self.commands \
-            and self.status.get("BSH.Common.Status.OperationState") == "BSH.Common.EnumType.OperationState.Run":
+            and "BSH.Common.Status.OperationState" in self.status \
+            and self.status["BSH.Common.Status.OperationState"].value == "BSH.Common.EnumType.OperationState.Run":
             return await self.async_send_command("BSH.Common.Command.PauseProgram", True)
         return False
 
     async def async_resume_paused_program(self):
         """ Resume a paused program """
         if "BSH.Common.Command.ResumeProgram" in self.commands \
-            and self.status.get("BSH.Common.Status.OperationState") == "BSH.Common.EnumType.OperationState.Pause":
+            and "BSH.Common.Status.OperationState" in self.status \
+            and self.status["BSH.Common.Status.OperationState"].value == "BSH.Common.EnumType.OperationState.Pause":
             return await self.async_send_command("BSH.Common.Command.ResumeProgram", True)
         return False
 
@@ -363,7 +403,7 @@ class Appliance():
             self.commands = await self._async_fetch_commands()
 
             is_new_state = self.status.get('BSH.Common.Status.OperationState') != value
-            self.status[key] = value
+            self.status[key].value = value
             # if value == 'BSH.Common.EnumType.OperationState.Finished':
             #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
             #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
@@ -393,7 +433,7 @@ class Appliance():
                 #self.active_program.options[key].value = value
                 self.active_program = await self._async_fetch_programs('active')
             if key in self.status:
-                self.status[key] = value
+                self.status[key].value = value
             if key in self.settings:
                 #self.settings = await self._async_fetch_settings()
                 self.settings[key].value = value
@@ -540,21 +580,10 @@ class Appliance():
             _LOGGER.debug("Didn't get any data for Options of %s/%s", program_type, program_key)
             return None
 
-
         options = self.optionlist_to_dict(data['options'])
         _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, program_key)
         return options
 
-        # if program_type=='avilable':
-        #     return self.optionlist_to_dict(data['options'])
-        # else:
-        #     options = {}
-        #     for option in data['options']:
-        #         endpoint = f"{self._base_endpoint}/programs/available/options/{option['key']}"
-        #         respnose = await self._homeconnect.api.async_get(endpoint)
-        #         o = Option.create(response.data)
-        #         options[o.key] = o
-        #     return options
 
     async def _async_fetch_status(self):
         """ Fetch the appliance status values """
@@ -570,7 +599,7 @@ class Appliance():
 
         statuses = {}
         for status in data['status']:
-            statuses[status['key']] = status['value']
+            statuses[status['key']] = Status.create(status)
 
         _LOGGER.debug("Loaded %d Statuses", len(statuses))
         return statuses
@@ -613,7 +642,7 @@ class Appliance():
 
         commands = {}
         for command in data['commands']:
-            commands[command['key']] = command['name']
+            commands[command['key']] = Command.create(command)
 
         _LOGGER.debug("Loaded %d Commands", len(commands))
         return commands
