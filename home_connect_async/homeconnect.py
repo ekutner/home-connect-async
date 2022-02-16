@@ -247,6 +247,7 @@ class HomeConnect(DataClassJsonMixin):
                 self.status |= self.HomeConnectStatus.UPDATES
 
                 async for event in event_source:
+                    _LOGGER.debug("Received event from SSE stream: %s", str(event))
                     backoff = 1
                     try:
                         await self._async_process_updates(event)
@@ -287,6 +288,7 @@ class HomeConnect(DataClassJsonMixin):
                     await event_source.close()
                     event_source = None
 
+        self.status &= self.HomeConnectStatus.NOUPDATES
         _LOGGER.debug("Exiting SSE event stream")
 
 
@@ -322,16 +324,6 @@ class HomeConnect(DataClassJsonMixin):
                     if haid in self.appliances:
                         appliance = self.appliances[haid]
                         await appliance.async_update_data(item['key'], item['value'])
-
-                        # if item['key'] in ['BSH.Common.Root.SelectedProgram', 'BSH.Common.Status.OperationState']:
-                        #     await self[haid].async_fetch_data(include_static_data=False)
-                        #     if item['value'] == 'BSH.Common.EnumType.OperationState.Run':
-                        #         await self._callbacks.async_broadcast_event(appliance, Events.PROGRAM_STARTED)
-                        #     elif item['value'] == 'BSH.Common.EnumType.OperationState.Finished':
-                        #         await self._callbacks.async_broadcast_event(appliance, Events.PROGRAM_FINISHED)
-
-                        # else:
-                        #     await self._callbacks.async_broadcast_event(appliance, item['key'], item['value'])
 
 
     def _get_haId_from_event(self, event:dict):
