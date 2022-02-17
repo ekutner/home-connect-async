@@ -96,6 +96,7 @@ class HomeConnect(DataClassJsonMixin):
                 # manually initialize the appliances because they were created from json
                 for appliance in hc.appliances.values():
                     appliance._homeconnect = hc
+                    appliance._callbacks = hc._callbacks
             except Exception as ex:
                 _LOGGER.exception("Exception when loading HomeConnect data from JSON", exc_info=ex)
         if not hc:
@@ -153,16 +154,20 @@ class HomeConnect(DataClassJsonMixin):
                 haid_list = []
                 if 'homeappliances' in data:
                     for ha in data['homeappliances']:
-                        haid_list.append(ha['haId'])
+                        haid = ha['haId']
+                        haid_list.append(haid)
                         if ha['connected']:
-                            if ha['haId'] in self.appliances and refresh==self.RefreshMode.DYNAMIC_ONLY:
+                            if haid in self.appliances and refresh==self.RefreshMode.DYNAMIC_ONLY:
                                 # the appliance was already loaded so just refresh the data
-                                await self.appliances[ha['haId']].async_fetch_data(include_static_data=False)
-                            elif ha['haId'] not in self.appliances or refresh==self.RefreshMode.ALL:
+                                await self.appliances[haid].async_fetch_data(include_static_data=False)
+                            elif haid not in self.appliances or refresh==self.RefreshMode.ALL:
                                 appliance = await Appliance.async_create(self, ha)
-                                self.appliances[ha['haId']] = appliance
+                                self.appliances[haid] = appliance
                             await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], Events.PAIRED)
                             _LOGGER.debug("Loadded appliance: %s", self.appliances[ha['haId']].name)
+                        elif haid in self.appliances:
+                            _LOGGER.warning("The appliance (%s) is disconnected when loading for the first time", haid)
+                            await self.appliances[haid].async_set_connection_state(False)
 
                 # clear appliances that are no longer paired with the service
                 for haId in self.appliances.keys():
@@ -318,24 +323,25 @@ class HomeConnect(DataClassJsonMixin):
         else:
             # Type is NOTIFY or EVENT
             data = json.loads(event.data)
+            haid = data['haId']
             if 'items' in data:
                 for item in data['items']:
-                    haid = self._get_haId_from_event(item) if 'uri' in item else haid
+                    # haid = self._get_haId_from_event(item) if 'uri' in item else haid
                     if haid in self.appliances:
                         appliance = self.appliances[haid]
                         await appliance.async_update_data(item['key'], item['value'])
 
 
-    def _get_haId_from_event(self, event:dict):
-        """ Parse the uri field that exists in some streamed events to extract the haID
-        This seems safer than relying on the last_event_id field so preferred when it's available
-        """
-        uri_parts = event['uri'].split('/')
-        assert(uri_parts[0]=='')
-        assert(uri_parts[1]=='api')
-        assert(uri_parts[2]=='homeappliances')
-        haId = uri_parts[3]
-        return haId
+    # def _get_haId_from_event(self, event:dict):
+    #     """ Parse the uri field that exists in some streamed events to extract the haID
+    #     This seems safer than relying on the last_event_id field so preferred when it's available
+    #     """
+    #     uri_parts = event['uri'].split('/')
+    #     assert(uri_parts[0]=='')
+    #     assert(uri_parts[1]=='api')
+    #     assert(uri_parts[2]=='homeappliances')
+    #     haId = uri_parts[3]
+    #     return haId
 
 
     def register_callback(self, callback:Callable[[Appliance, str], None] | Callable[[Appliance, str, any], None], keys:str|Sequence[str], appliance:Appliance|str = None):

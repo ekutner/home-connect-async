@@ -9,6 +9,7 @@ from typing import Optional
 from dataclasses_json import dataclass_json, Undefined, config
 
 import home_connect_async.homeconnect as homeconnect
+import home_connect_async.callback_registery as callback_registery
 from .const import Events
 from .common import HomeConnectError
 
@@ -143,47 +144,6 @@ class Program():
 
 
 
-# _KT = typing.TypeVar("_KT") #  key type
-# _VT = typing.TypeVar("_VT") #  value type
-# class ProgramsDict(dict[str, Program]):
-#     """ A custom dictionary class to handle undocumented program keys that have sub-keys """
-#     def __contains__(self, key: str) -> bool:
-#         if not super().__contains__(key) and isinstance(key, str):
-#             key_parts = key.split('.')
-#             if super().__contains__('.'.join(key_parts[:-1])):
-#                 return True
-#         return super().__contains__(key)
-
-#     def __getitem__(self, __k: _KT) -> _VT:
-#         if not super().__contains__(__k) and isinstance(__k, str):
-#             key_parts = __k.split('.')
-#             subkey = '.'.join(key_parts[:-1])
-#             if super().__contains__(subkey):
-#                 return super().__getitem__(subkey)
-
-#         return super().__getitem__(__k)
-
-#     def get(self, __key:str, __default=None, exact:bool=False):
-#         key = self.contained_subkey(__key, exact)
-#         if key:
-#             return super().get(key)
-#         return __default
-
-#     def contains(self, key: _KT, exact:bool=False):
-#         k = self.contained_subkey(key, exact)
-#         return k is not None
-
-#     def contained_subkey(self, key, exact:bool=False) -> str|None:
-#         """ Get the longest valid subkey of the the passed key which is contained
-#         in the dictionary or None if no such subkey exists"""
-#         try_subkeys = 1 if  exact else 2
-#         key_parts = key.split('.')
-#         for l in range(len(key_parts), len(key_parts)-try_subkeys, -1):
-#             subkey = '.'.join(key_parts[:l])
-#             if super().__contains__(subkey):
-#                 return subkey
-#         return None
-
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class Appliance():
@@ -205,10 +165,9 @@ class Appliance():
     commands:dict[str, Command] = None
 
     # Internal fields
-    #_api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _homeconnect:Optional[homeconnect.HomeConnect] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, decoder=lambda val: None, exclude=lambda val: True))
-    _wildcard_callbacks:Optional[Sequence[str]] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
-    _updates_callbacks:Optional[dict[str, Callable[[Appliance, str, any], None]]] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    #_api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _callbacks:Optional[callback_registery.CallbackRegistry] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
     #region - Manage Programs
     async def async_get_active_program(self):
@@ -376,10 +335,11 @@ class Appliance():
 
     async def async_set_connection_state(self, connected:bool):
         """ Update the appliance connection state when notified about a state change from the event stream """
-        self.connected = connected
-        if connected:
-            await self.async_fetch_data(include_static_data=False)
-        await self._homeconnect._callbacks.async_broadcast_event(self, Events.CONNECTION_CHANGED, connected)
+        if connected != self.connected:
+            self.connected = connected
+            if connected:
+                await self.async_fetch_data(include_static_data=False)
+            await self._callbacks.async_broadcast_event(self, Events.CONNECTION_CHANGED, connected)
 
 
     #region - Handle Updates, Events and Callbacks
@@ -389,26 +349,32 @@ class Appliance():
 
         if key == 'BSH.Common.Root.SelectedProgram':
             self.selected_program = await self._async_fetch_programs('selected')
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif key == 'BSH.Common.Root.ActiveProgram':
-            # self.active_program = await self._async_fetch_programs('active')
-            # self.commands = await self._async_fetch_commands()
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
-            #await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif key == 'BSH.Common.Event.ProgramFinished':
-            self.commands = await self._async_fetch_commands()
-            await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
-        elif key == 'BSH.Common.Status.OperationState':
+            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif key == 'BSH.Common.Root.ActiveProgram' and value:
             self.active_program = await self._async_fetch_programs('active')
             self.commands = await self._async_fetch_commands()
-
+            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
+            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif ( (key == 'BSH.Common.Root.ActiveProgram' and not value) or key == 'BSH.Common.Event.ProgramFinished')  and self.active_program:
+            self.active_program = None
+            self.commands = await self._async_fetch_commands()
+            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
+            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif key in ['BSH.Common.Option.ProgramProgress', 'BSH.Common.Option.RemainingProgramTime']:
+            if self.active_program:
+                # no need to reload everything for progress events
+                self.active_program.options[key].value = value
+            else:
+                # apparently this can be a thing (getting progress notifications without getting the ActiveProgram event first)
+                self.active_program = await self._async_fetch_programs('active')
+                self.commands = await self._async_fetch_commands()
+                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif key == 'BSH.Common.Status.OperationState':
             is_new_state = self.status.get('BSH.Common.Status.OperationState') != value
-            self.status[key].value = value
-            # if value == 'BSH.Common.EnumType.OperationState.Finished':
-            #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
-            #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-            if value == 'BSH.Common.EnumType.OperationState.Ready':
-                self.commands = await self._async_fetch_commands()  # Just for the chance we would get a different result when a program is inactive
+
+            if value == 'BSH.Common.EnumType.OperationState.Ready' \
+                and (not self.available_programs or len(self.available_programs) < 2):
                 # Workaround for the fact the API doesn't provide all the data (such as available programs)
                 # when a program is active, so if for some reason we were loaded with missing data reload it
                 old_available_programs_count = len(self.available_programs) if self.available_programs else 0
@@ -417,28 +383,29 @@ class Appliance():
                 except HomeConnectError:
                     pass
                 if old_available_programs_count != len(self.available_programs):
-                    await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
-            if is_new_state:
-                await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-                # if not self.available_programs or len(self.available_programs) < 2:
-                #     await self.async_fetch_data(include_static_data=True)
-                #     await self._homeconnect._callbacks.async_broadcast_event(self, Events.PAIRED)
+                    await self._callbacks.async_broadcast_event(self, Events.PAIRED)
+                    await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+
+            elif is_new_state:
+                await self.async_fetch_data(include_static_data=False)
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         else:
             # update options, statuses and settings in the data model
+            # In all the below cases we have to call the API because the friendly names are not included in the event data
             if self.selected_program and key in self.selected_program.options:
                 # self.selected_program.options[key].value = value
                 self.selected_program = await self._async_fetch_programs('selected')
-                #self.selected_program.options[key].value = value
             if self.active_program and key in self.active_program.options:
                 #self.active_program.options[key].value = value
                 self.active_program = await self._async_fetch_programs('active')
             if key in self.status:
-                self.status[key].value = value
+                #self.status[key].value = value
+                self.status = await self._async_fetch_status()
             if key in self.settings:
-                #self.settings = await self._async_fetch_settings()
-                self.settings[key].value = value
+                #self.settings[key].value = value
+                self.settings = await self._async_fetch_settings()
 
-        await self._homeconnect._callbacks.async_broadcast_event(self, key, value)
+        await self._callbacks.async_broadcast_event(self, key, value)
 
     def register_callback(self, callback:Callable[[Appliance, str, any], None], keys:str|Sequence[str] ) -> None:
         """ Register a callback to be called when an update is received for the specified keys
@@ -448,15 +415,15 @@ class Appliance():
 
             The special key "DEFAULT" may be used to catch all unhandled events
         """
-        self._homeconnect._callbacks.register_callback(callback, keys, self)
+        self._callbacks.register_callback(callback, keys, self)
 
     def deregister_callback(self, callback:Callable[[], None], keys:str|Sequence[str]) -> None:
         """ Clear a callback that was prevesiously registered so it stops getting notifications """
-        self._homeconnect._callbacks.deregister_callback(callback, keys, self)
+        self._callbacks.deregister_callback(callback, keys, self)
 
     def clear_all_callbacks(self):
         """ Clear all the registered callbacks """
-        self._homeconnect._callbacks.clear_appliance_callbacks(self)
+        self._callbacks.clear_appliance_callbacks(self)
 
 
     #endregion
@@ -480,6 +447,7 @@ class Appliance():
             uri = f"/api/homeappliances/{properties['haId']}"
         )
         appliance._homeconnect = hc
+        appliance._callbacks = hc._callbacks
 
         await appliance.async_fetch_data()
 
@@ -503,18 +471,18 @@ class Appliance():
                 if available_programs and (not self.available_programs or len(available_programs)<2):
                     # Only update the available programs if we got new data
                     self.available_programs = available_programs
-                    self.commands = await self._async_fetch_commands()
 
             self.selected_program = await self._async_fetch_programs('selected')
             self.active_program = await self._async_fetch_programs('active')
             self.settings = await self._async_fetch_settings()
             self.status = await self._async_fetch_status()
+            self.commands = await self._async_fetch_commands()
 
             _LOGGER.debug("Finished loading appliance data for %s (%s)", self.name, self.haId)
             if not self.connected:
                 await self.async_set_connection_state(True)
             else:
-                await self._homeconnect._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         except HomeConnectError as ex:
             if ex.error_key:
                 delay = delay + 60 if delay<300 else 300
