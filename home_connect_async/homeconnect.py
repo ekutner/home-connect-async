@@ -157,10 +157,13 @@ class HomeConnect(DataClassJsonMixin):
                         haid = ha['haId']
                         haid_list.append(haid)
                         if ha['connected']:
-                            if haid in self.appliances and refresh==self.RefreshMode.DYNAMIC_ONLY:
+                            if haid in self.appliances:
                                 # the appliance was already loaded so just refresh the data
-                                await self.appliances[haid].async_fetch_data(include_static_data=False)
-                            elif haid not in self.appliances or refresh==self.RefreshMode.ALL:
+                                if refresh == self.RefreshMode.DYNAMIC_ONLY:
+                                    await self.appliances[haid].async_fetch_data(include_static_data=False)
+                                elif refresh == self.RefreshMode.ALL:
+                                    await self.appliances[haid].async_fetch_data(include_static_data=True)
+                            else:
                                 appliance = await Appliance.async_create(self, ha)
                                 self.appliances[haid] = appliance
                             await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], Events.PAIRED)
