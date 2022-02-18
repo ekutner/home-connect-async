@@ -210,14 +210,16 @@ class Appliance():
         if program is not None:
             program_key = program.key
 
-        if program_key is None and self.selected_program is not None:
-            program_key = self.selected_program.key
-        else:
-            _LOGGER.error('Either "program" or "key" must be specified')
-            return False
+        if not program_key:
+            if self.selected_program:
+                program_key = self.selected_program.key
+            else:
+                _LOGGER.error('Either "program" or "key" must be specified')
+                return False
 
         if not self.available_programs or program_key not in self.available_programs:
             _LOGGER.warning("The selected program in not one of the available programs (not supported by the API)")
+            raise HomeConnectError("The specified program in not one of the available programs (not supported by the API)")
             return False
 
         if options is None and self.selected_program and self.available_programs:
