@@ -470,7 +470,7 @@ class Appliance():
             _LOGGER.debug("Starting to load appliance data for %s (%s)", self.name, self.haId)
             if include_static_data:
                 available_programs = await self._async_fetch_programs('available')
-                if available_programs and (not self.available_programs or len(self.available_programs)<2):
+                if available_programs: #and (not self.available_programs or len(self.available_programs)<2):
                     # Only update the available programs if we got new data
                     self.available_programs = available_programs
 
@@ -552,6 +552,7 @@ class Appliance():
 
         options = self.optionlist_to_dict(data['options'])
         _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, program_key)
+        _LOGGER.debug("%s", str(options))
         return options
 
 
