@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 import re
 from typing import Optional
 from dataclasses_json import dataclass_json, Undefined, config
-
+from home_connect_async.api import HomeConnectApi
 import home_connect_async.homeconnect as homeconnect
 import home_connect_async.callback_registery as callback_registery
 from .const import Events
-from .common import HomeConnectError
+from .common import HomeConnectError, Synchronization
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,6 +67,7 @@ class Option():
     max:Optional[int] = None
     stepsize:Optional[int] = None
     allowedvalues:Optional[list[str]] = None
+    execution:Optional[str] = None
 
     @classmethod
     def create(cls, data:dict):
@@ -85,6 +86,7 @@ class Option():
             option.max = constraints.get('max')
             option.stepsize = constraints.get('stepsize')
             option.allowedvalues = constraints.get('allowedvalues')
+            option.execution = constraints.get('execution')
         return option
 
     def get_option_to_apply(self, value, exception_on_error=False):
@@ -166,7 +168,7 @@ class Appliance():
 
     # Internal fields
     _homeconnect:Optional[homeconnect.HomeConnect] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, decoder=lambda val: None, exclude=lambda val: True))
-    #_api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _callbacks:Optional[callback_registery.CallbackRegistry] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
     #region - Manage Programs
@@ -197,7 +199,19 @@ class Appliance():
             _LOGGER.error('Either "program" or "key" must be specified')
             return False
 
-        return await self._async_set_program(key, options, 'selected')
+        async with Synchronization.selected_program_lock:
+            res = await self._async_set_program(key, options, 'selected')
+            if res and (not self.selected_program or self.selected_program.key != key):
+                # There is a race condition between this and the selected program event
+                # so check if it was alreayd update so we don't call twice
+                # Note that this can't be dropped because the new options notification may arrive before the
+                # program selected event and then the option values will not match the values that were there for the
+                # previous program
+                self.selected_program = await self._async_fetch_programs('selected')
+                self.available_programs = await self._async_fetch_programs('available')
+                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+
 
     async def async_start_program(self, program_key:str=None, options:Sequence[dict]=None, program:Program=None) -> bool:
         """ Started the specified program
@@ -220,7 +234,6 @@ class Appliance():
         if not self.available_programs or program_key not in self.available_programs:
             _LOGGER.warning("The selected program in not one of the available programs (not supported by the API)")
             raise HomeConnectError("The specified program in not one of the available programs (not supported by the API)")
-            return False
 
         if options is None and self.selected_program and self.available_programs:
             options = []
@@ -238,7 +251,7 @@ class Appliance():
         if self.active_program:
             endpoint = f'{self._base_endpoint}/programs/active'
             _LOGGER.debug("Calling %s with delete verb", endpoint)
-            response = await self._homeconnect._api.async_delete(endpoint)
+            response = await self._api.async_delete(endpoint)
             if response.status == 204:
                 return True
             elif response.error_description:
@@ -291,7 +304,7 @@ class Appliance():
         }
         jscmd = json.dumps(command, indent=2)
         _LOGGER.debug("Calling %s with:\n%s", endpoint, jscmd)
-        response = await self._homeconnect._api.async_put(endpoint, jscmd)
+        response = await self._api.async_put(endpoint, jscmd)
         if response.status == 204:
             return True
         elif response.error_description:
@@ -317,7 +330,7 @@ class Appliance():
 
             jscmd = json.dumps(command, indent=2)
             _LOGGER.debug("Calling %s with:\n%s", endpoint, jscmd)
-            response = await self._homeconnect._api.async_put(endpoint, jscmd)
+            response = await self._api.async_put(endpoint, jscmd)
             if response.status == 204:
                 return True
             elif response.error_key == "SDK.Error.UnsupportedOption":
@@ -346,66 +359,88 @@ class Appliance():
 
     #region - Handle Updates, Events and Callbacks
 
-    async def async_update_data(self, key:str, value) -> None:
-        """ Update the appliance data model from a change event notification """
 
-        if key == 'BSH.Common.Root.SelectedProgram':
-            self.selected_program = await self._async_fetch_programs('selected')
-            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif key == 'BSH.Common.Root.ActiveProgram' and value:
+    async def async_update_data(self, data:dict) -> None:
+        """ Update the appliance data model from a change event notification """
+        key:str = data['key']
+        value = data['value']
+
+
+        if key == 'BSH.Common.Root.SelectedProgram' and (not self.selected_program or self.selected_program.key != value):
+            async with Synchronization.selected_program_lock:
+                # Have to check again after aquiring the lock
+                if key == 'BSH.Common.Root.SelectedProgram' and (not self.selected_program or self.selected_program.key != value):
+                    if value:
+                        self.selected_program = await self._async_fetch_programs('selected')
+                        self.available_programs = await self._async_fetch_programs('available')
+                        await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
+                    else:
+                        self.selected_program = None
+                        self.available_programs = await self._async_fetch_programs('available')
+                    await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif (key == 'BSH.Common.Root.ActiveProgram' and value) or \
+            ( key in ['BSH.Common.Option.ProgramProgress', 'BSH.Common.Option.RemainingProgramTime'] and not self.active_program ):
+            # apparently it is possible to get progress notifications without getting the ActiveProgram event first so we handle that
             self.active_program = await self._async_fetch_programs('active')
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif ( (key == 'BSH.Common.Root.ActiveProgram' and not value) or key == 'BSH.Common.Event.ProgramFinished')  and self.active_program:
+        elif ( (key == 'BSH.Common.Root.ActiveProgram' and not value) or (key == 'BSH.Common.Event.ProgramFinished') ) and self.active_program:
             self.active_program = None
             self.commands = await self._async_fetch_commands()
+            self.available_programs = await self._async_fetch_programs('available')
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif key in ['BSH.Common.Option.ProgramProgress', 'BSH.Common.Option.RemainingProgramTime']:
-            if self.active_program:
-                # no need to reload everything for progress events
-                self.active_program.options[key].value = value
-            else:
-                # apparently this can be a thing (getting progress notifications without getting the ActiveProgram event first)
-                self.active_program = await self._async_fetch_programs('active')
-                self.commands = await self._async_fetch_commands()
-                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
-                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif key == 'BSH.Common.Status.OperationState':
-            is_new_state = self.status.get('BSH.Common.Status.OperationState') != value
-
-            if value == 'BSH.Common.EnumType.OperationState.Ready' \
-                and (not self.available_programs or len(self.available_programs) < 2):
-                # Workaround for the fact the API doesn't provide all the data (such as available programs)
-                # when a program is active, so if for some reason we were loaded with missing data reload it
-                old_available_programs_count = len(self.available_programs) if self.available_programs else 0
-                try:
-                    await self.async_fetch_data(include_static_data=True)
-                except HomeConnectError:
-                    pass
-                if old_available_programs_count != len(self.available_programs):
-                    await self._callbacks.async_broadcast_event(self, Events.PAIRED)
-                    await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-
-            elif is_new_state:
-                await self.async_fetch_data(include_static_data=False)
-                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif key == 'BSH.Common.Status.OperationState' and self.status.get('BSH.Common.Status.OperationState') != value:
+            # ignore repeat notifiations of the same state
+            await self.async_fetch_data(include_static_data=False)
+            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         else:
             # update options, statuses and settings in the data model
             # In all the below cases we have to call the API because the friendly names are not included in the event data
             if self.selected_program and key in self.selected_program.options:
-                # self.selected_program.options[key].value = value
-                self.selected_program = await self._async_fetch_programs('selected')
+                self.selected_program.options[key].value = value
+                self.selected_program.options[key].name = data.get('name')
+                self.selected_program.options[key].displayvalue = data.get('displayvalue')
+                #self.selected_program = await self._async_fetch_programs('selected')
             if self.active_program and key in self.active_program.options:
-                #self.active_program.options[key].value = value
-                self.active_program = await self._async_fetch_programs('active')
-            if key in self.status:
-                #self.status[key].value = value
-                self.status = await self._async_fetch_status()
-            if key in self.settings:
-                #self.settings[key].value = value
-                self.settings = await self._async_fetch_settings()
+                self.active_program.options[key].value = value
+                self.active_program.options[key].name = data.get('name')
+                self.active_program.options[key].displayvalue = data.get('displayvalue')
+                #self.active_program = await self._async_fetch_programs('active')
+            if '/status/' in data['uri']:
+                if key in self.status:
+                    self.status[key].value = value
+                    self.status[key].name = data.get('name')
+                    self.status[key].displayvalue = data.get('displayvalue')
+                else:
+                    self.status = await self._async_fetch_status()
+            if '/settings/' in data['uri']:
+                if key in self.settings:
+                    self.settings[key].value = value
+                    self.settings[key].name = data.get('name')
+                    self.settings[key].displayvalue = data.get('displayvalue')
+                else:
+                    self.settings = await self._async_fetch_settings()
+
+        # Handle cases were the appliance data was loaded without getting all the programs
+        if  (
+                key in ['BSH.Common.Status.OperationState', 'BSH.Common.Status.RemoteControlActive']
+            ) and (
+                'BSH.Common.Status.OperationState' not in self.status
+                or self.status['BSH.Common.Status.OperationState'].value == 'BSH.Common.EnumType.OperationState.Ready'
+             ) and (
+                'BSH.Common.Status.RemoteControlActive' not in self.status
+                 or self.status['BSH.Common.Status.RemoteControlActive'].value
+            ) and (
+                not self.available_programs or len(self.available_programs) < 2
+            ):
+            # If the state is Ready and remote control is possible and we didn't load the available programs before then load them now
+            available_programs = await self._async_fetch_programs("available")
+            if available_programs:
+                self.available_programs = available_programs
+                await self._callbacks.async_broadcast_event(self, Events.PAIRED)
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         await self._callbacks.async_broadcast_event(self, key, value)
 
@@ -450,6 +485,7 @@ class Appliance():
         )
         appliance._homeconnect = hc
         appliance._callbacks = hc._callbacks
+        appliance._api = hc._api
 
         await appliance.async_fetch_data()
 
@@ -468,17 +504,32 @@ class Appliance():
             await asyncio.sleep(delay)
         try:
             _LOGGER.debug("Starting to load appliance data for %s (%s)", self.name, self.haId)
-            if include_static_data:
-                available_programs = await self._async_fetch_programs('available')
-                if available_programs and (not self.available_programs or len(self.available_programs)<2):
-                    # Only update the available programs if we got new data
-                    self.available_programs = available_programs
 
             self.selected_program = await self._async_fetch_programs('selected')
             self.active_program = await self._async_fetch_programs('active')
             self.settings = await self._async_fetch_settings()
             self.status = await self._async_fetch_status()
             self.commands = await self._async_fetch_commands()
+            self.available_programs = await self._async_fetch_programs('available')
+            # if include_static_data or not self.available_programs:
+            #     if  (
+            #             'BSH.Common.Status.OperationState' not in self.status
+            #             or self.status['BSH.Common.Status.OperationState'].value == 'BSH.Common.EnumType.OperationState.Ready'
+            #         ) and (
+            #             'BSH.Common.Status.RemoteControlActive' not in self.status
+            #             or self.status['BSH.Common.Status.RemoteControlActive'].value):
+            #         # Only load the available programs if the state allows them to be loaded
+            #         available_programs = await self._async_fetch_programs('available')
+            #         if available_programs and (not self.available_programs or len(self.available_programs)<2):
+            #             # Only update the available programs if we got new data
+            #             self.available_programs = available_programs
+            #     else:
+            #         self.available_programs = None
+            #         _LOGGER.debug("Not loading available programs becuase BSH.Common.Status.OperationState=%s  and BSH.Common.Status.RemoteControlActive=%s",
+            #             self.status['BSH.Common.Status.OperationState'].value if 'BSH.Common.Status.OperationState' in self.status else None,
+            #             str(self.status['BSH.Common.Status.RemoteControlActive'].value) if 'BSH.Common.Status.RemoteControlActive' in self.status else None )
+
+
 
             _LOGGER.debug("Finished loading appliance data for %s (%s)", self.name, self.haId)
             if not self.connected:
@@ -495,19 +546,27 @@ class Appliance():
             _LOGGER.debug("Unexpected exception in Appliance.async_fetch_data", exc_info=ex)
             raise HomeConnectError("Unexpected exception in Appliance.async_fetch_data", inner_exception=ex)
 
+    # async def _async_fetch_available_programs(self):
+    #     """ Get the available programs and the options for the current program """
+    #     available_prgrams = await self._async_fetch_programs("available")
+    #     program_key = self.active_program.key if self.active_program else self.selected_program.key if self.selected_program else None
+    #     if available_prgrams and program_key in available_prgrams:
+    #         available_prgrams[program_key].options = await self._async_fetch_available_options(program_key)
+    #     return available_prgrams
+
     async def _async_fetch_programs(self, program_type:str):
         """ Main function to fetch the different kinds of programs with their options from the cloud service """
         endpoint = f'{self._base_endpoint}/programs/{program_type}'
-        response = await self._homeconnect._api.async_get(endpoint)
+        response = await self._api.async_get(endpoint)
         if response.error_key:
-            _LOGGER.debug("Failed to load Programs: %s with error code=%d key=%s", program_type, response.status, response.error_key)
+            _LOGGER.debug("Failed to load %s programs with error code=%d key=%s", program_type, response.status, response.error_key)
             return None
         elif not response.data:
             _LOGGER.debug("Didn't get any data for Programs: %s", program_type)
             raise HomeConnectError(msg=f"Failed to get a valid response from the Home Connect service ({response.status})", response=response)
         data = response.data
 
-        #programs = ProgramsDict()
+        current_program_key = self.active_program.key if self.active_program else self.selected_program.key if self.selected_program else None
         programs = {}
         if 'programs' not in data:
             # When fetching selected and active programs the parent program node doesn't exist so we force it
@@ -518,8 +577,10 @@ class Appliance():
             if 'options' in p:
                 options = self.optionlist_to_dict(p['options'])
                 _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, prog.key)
+            elif program_type=='available' and prog.key == current_program_key:
+                options = await self._async_fetch_available_options(p['key'])
             else:
-                options = await self._async_fetch_options(program_type, p['key'])
+                options = None
             prog.options = options
 
             programs[p['key']] = prog
@@ -532,33 +593,27 @@ class Appliance():
             _LOGGER.debug("Loaded %d available Programs", len(programs))
             return programs
 
-    async def _async_fetch_options(self, program_type:str, program_key:str=None):
+    async def _async_fetch_available_options(self, program_key:str=None):
         """ Fetch detailed options of a program """
-
-        # TODO: The program_type is not really used so it may make sense to clean this code up
-        if program_type=='available':
-            endpoint = f"{self._base_endpoint}/programs/available/{program_key}"
-        else:
-            endpoint = f"{self._base_endpoint}/programs/{program_type}/options"
-
-        response = await self._homeconnect._api.async_get(endpoint)      # This is expected to always succeed if the previous call succeeds
+        endpoint = f"{self._base_endpoint}/programs/available/{program_key}"
+        response = await self._api.async_get(endpoint)      # This is expected to always succeed if the previous call succeeds
         if response.error_key:
-            _LOGGER.debug("Failed to load Options of %s/%s with error code=%d key=%s", program_type, program_key, response.status, response.error_key)
+            _LOGGER.debug("Failed to load Options of available/%s with error code=%d key=%s", program_key, response.status, response.error_key)
             return None
         data = response.data
         if data is None or 'options' not in data:
-            _LOGGER.debug("Didn't get any data for Options of %s/%s", program_type, program_key)
+            _LOGGER.debug("Didn't get any data for Options of available/%s", program_key)
             return None
 
         options = self.optionlist_to_dict(data['options'])
-        _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, program_key)
+        _LOGGER.debug("Loaded %d Options for available/%s", len(options), program_key)
         return options
 
 
     async def _async_fetch_status(self):
         """ Fetch the appliance status values """
         endpoint = f'{self._base_endpoint}/status'
-        response = await self._homeconnect._api.async_get(endpoint)
+        response = await self._api.async_get(endpoint)
         if response.error_key:
             _LOGGER.debug("Failed to load Status with error code=%d key=%s", response.status, response.error_key)
             return {}
@@ -578,7 +633,7 @@ class Appliance():
     async def _async_fetch_settings(self):
         """ Fetch the appliance settings """
         endpoint = f'{self._base_endpoint}/settings'
-        response = await self._homeconnect._api.async_get(endpoint)
+        response = await self._api.async_get(endpoint)
         if response.error_key:
             _LOGGER.debug("Failed to load Settings with error code=%d key=%s", response.status, response.error_key)
             return {}
@@ -590,7 +645,7 @@ class Appliance():
         settings = {}
         for setting in data['settings']:
             endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
-            response = await self._homeconnect._api.async_get(endpoint)
+            response = await self._api.async_get(endpoint)
             if response.status != 200:
                 continue
             settings[setting['key']] = Option.create(response.data)
@@ -601,7 +656,7 @@ class Appliance():
     async def _async_fetch_commands(self):
         """ Fetch the appliance commands """
         endpoint = f'{self._base_endpoint}/commands'
-        response = await self._homeconnect._api.async_get(endpoint)
+        response = await self._api.async_get(endpoint)
         if response.error_key:
             _LOGGER.debug("Failed to load Settings with error code=%d key=%s", response.status, response.error_key)
             return {}
@@ -618,10 +673,10 @@ class Appliance():
         return commands
 
 
-    def optionlist_to_dict(self, l:Sequence[dict]) -> dict:
+    def optionlist_to_dict(self, options_list:Sequence[dict]) -> dict:
         """ Helper funtion to convert a list of options into a dictionary keyd by the option "key" """
         d = {}
-        for element in l:
+        for element in options_list:
             d[element['key']] = Option.create(element)
         return d
 

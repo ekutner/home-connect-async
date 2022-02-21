@@ -100,7 +100,7 @@ class HomeConnectApi():
 
     async def async_get_event_stream(self, endpoint):
         """ Returns a Server Sent Events (SSE) stream to be consumed by the caller """
-        return await self._auth.stream(endpoint)
+        return await self._auth.stream(endpoint, self._lang)
 
 
     async def async_stream(self, endpoint:str, event_handler:Callable[[str], None]):
@@ -109,7 +109,7 @@ class HomeConnectApi():
         event_source = None
         while True:
             try:
-                event_source = await self._auth.stream(endpoint)
+                event_source = await self._auth.stream(endpoint, self._lang)
                 await event_source.connect()
                 async for event in event_source:
                     backoff = 1

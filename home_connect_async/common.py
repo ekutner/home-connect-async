@@ -1,5 +1,8 @@
 """ Common classes shared across the code """
 
+import asyncio
+
+
 class HomeConnectError(Exception):
     """ Common exception class for the SDK """
     def __init__(self, msg:str = None, code:int = None, response = None, inner_exception = None):
@@ -17,4 +20,8 @@ class HomeConnectError(Exception):
 
         super().__init__(msg, code, self.error_key, self.error_description, inner_exception)
 
+
+class Synchronization():
+    """ Class to hold global syncronization objects """
+    selected_program_lock = asyncio.Lock()
 

@@ -39,7 +39,8 @@ class AbstractAuth(ABC):
         access_token = await self.async_get_access_token()
         headers['authorization'] = f'Bearer {access_token}'
         headers['Accept'] = 'application/vnd.bsh.sdk.v1+json'
-        headers['Accept-Language'] = lang if lang else 'en-GB'
+        if lang:
+            headers['Accept-Language'] = lang
         if method == 'put':
             headers['Content-Type'] = 'application/vnd.bsh.sdk.v1+json'
 
@@ -47,13 +48,14 @@ class AbstractAuth(ABC):
             method, f"{self.host}{endpoint}", **kwargs, headers=headers,
         )
 
-    async def stream(self, endpoint:str, **kwargs) -> sse_client.EventSource:
+    async def stream(self, endpoint:str, lang:str=None, **kwargs) -> sse_client.EventSource:
         """ Initiate a SSE stream """
         headers = {}
         access_token = await self.async_get_access_token()
         headers['authorization'] = f'Bearer {access_token}'
         headers['Accept'] = 'application/vnd.bsh.sdk.v1+json'
-        #headers['Accept-Language'] = 'en-GB'
+        if lang:
+            headers['Accept-Language'] = lang
         #timeout = aiohttp.ClientTimeout(total = ( self._auth.access_token_expirs_at - datetime.now() ).total_seconds() )
         timeout = aiohttp.ClientTimeout(total = 3600 )
         return sse_client.EventSource(f"{self.host}{endpoint}", session=self.websession, headers=headers, timeout=timeout, **kwargs)

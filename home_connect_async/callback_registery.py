@@ -18,6 +18,7 @@ class CallbackRegistry():
     def __init__(self) -> None:
         self._callbacks = {}
 
+
     def register_callback(self,
         callback:Callable[[Appliance, str, any], None] | Callable[[Appliance, str], None] | Callable[[Appliance], None] | Callable[[], None],
         keys:str|Events|Sequence[str|Events],

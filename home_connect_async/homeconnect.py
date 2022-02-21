@@ -97,6 +97,7 @@ class HomeConnect(DataClassJsonMixin):
                 for appliance in hc.appliances.values():
                     appliance._homeconnect = hc
                     appliance._callbacks = hc._callbacks
+                    appliance._api = api
             except Exception as ex:
                 _LOGGER.exception("Exception when loading HomeConnect data from JSON", exc_info=ex)
         if not hc:
@@ -332,7 +333,7 @@ class HomeConnect(DataClassJsonMixin):
                     # haid = self._get_haId_from_event(item) if 'uri' in item else haid
                     if haid in self.appliances:
                         appliance = self.appliances[haid]
-                        await appliance.async_update_data(item['key'], item['value'])
+                        await appliance.async_update_data(item)
 
 
     # def _get_haId_from_event(self, event:dict):
