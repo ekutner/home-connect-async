@@ -21,8 +21,8 @@ _LOGGER = logging.getLogger(__name__)
 class Status():
     """ Class to represent a Home Connect Status """
     key:str
-    name:Optional[str] = None
     value:Optional[any] = None
+    name:Optional[str] = None
     displayvalue:Optional[str] = None
 
     @classmethod
@@ -58,10 +58,10 @@ class Command():
 class Option():
     """ Class to represent a Home Connect Option """
     key:str
+    value:Optional[any] = None
     type:Optional[str] = None
     name:Optional[str] = None
     unit:Optional[str] = None
-    value:Optional[any] = None
     displayvalue:Optional[str] = None
     min:Optional[int] = None
     max:Optional[int] = None
@@ -165,6 +165,7 @@ class Appliance():
     status:dict[str, Status] = None
     settings:dict[str, Option] = None
     commands:dict[str, Command] = None
+    start_options:dict[str, Option] = None
 
     # Internal fields
     _homeconnect:Optional[homeconnect.HomeConnect] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, decoder=lambda val: None, exclude=lambda val: True))
@@ -172,6 +173,21 @@ class Appliance():
     _callbacks:Optional[callback_registery.CallbackRegistry] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
     #region - Manage Programs
+    def set_start_option(self, option_key:str, value) -> None:
+        """ Set an option that will be used when starting the program """
+        if not self.start_options:
+            self.start_options = {}
+        if option_key not in self.start_options:
+            self.start_options[option_key] = Option(option_key, value=value)
+        else:
+            self.start_options[option_key].value = value
+
+    def clear_start_option(self, option_key:str) -> None:
+        """ Clear a previously set start option """
+        if self.start_options and option_key in self.start_options:
+            del self.start_options[option_key]
+
+
     async def async_get_active_program(self):
         """ Get the active program """
         prog = await self._async_fetch_programs('active')
@@ -235,10 +251,15 @@ class Appliance():
             _LOGGER.warning("The selected program in not one of the available programs (not supported by the API)")
             raise HomeConnectError("The specified program in not one of the available programs (not supported by the API)")
 
-        if options is None and self.selected_program and self.available_programs:
+        if options is None:
             options = []
-            for opt in self.selected_program.options.values():
-                if opt.key in self.available_programs[program_key].options:
+            if self.selected_program and self.available_programs:
+                for opt in self.selected_program.options.values():
+                    if opt.key in self.available_programs[program_key].options and (not self.start_options or opt.key not in self.start_options):
+                        option = { "key": opt.key, "value": opt.value}
+                        options.append(option)
+            if self.start_options:
+                for opt in self.start_options.values():
                     option = { "key": opt.key, "value": opt.value}
                     options.append(option)
 
