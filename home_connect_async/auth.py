@@ -57,7 +57,7 @@ class AbstractAuth(ABC):
         if lang:
             headers['Accept-Language'] = lang
         #timeout = aiohttp.ClientTimeout(total = ( self._auth.access_token_expirs_at - datetime.now() ).total_seconds() )
-        timeout = aiohttp.ClientTimeout(total = 3600 )
+        timeout = aiohttp.ClientTimeout(total = 900 )
         return sse_client.EventSource(f"{self.host}{endpoint}", session=self.websession, headers=headers, timeout=timeout, **kwargs)
 
 

@@ -306,7 +306,12 @@ class HomeConnect(DataClassJsonMixin):
         haid = event.last_event_id
         if event.type == 'KEEP-ALIVE':
             self._last_update = datetime.now()
-        elif event.type == 'PAIRED':
+            return
+        if haid not in self.appliances:
+            # handle cases where the appliance wasn't loaded before
+            _LOGGER.debug("Unknown haId '%s' reloading HomeConnected from the API", haid)
+            await self.async_load_data()
+        if event.type == 'PAIRED':
             self.appliances[haid] = await Appliance.async_create(self, haId=haid)
             await self._callbacks.async_broadcast_event(self.appliances[haid],  Events.PAIRED)
         elif event.type == 'DEPAIRED':
@@ -328,6 +333,9 @@ class HomeConnect(DataClassJsonMixin):
             # Type is NOTIFY or EVENT
             data = json.loads(event.data)
             haid = data['haId']
+            if haid not in self.appliances:
+                _LOGGER.debug("Unknown haId '%s' reloading HomeConnected from the API", haid)
+                await self.async_load_data()
             if 'items' in data:
                 for item in data['items']:
                     # haid = self._get_haId_from_event(item) if 'uri' in item else haid

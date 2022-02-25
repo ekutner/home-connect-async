@@ -429,20 +429,21 @@ class Appliance():
                 self.active_program.options[key].name = data.get('name')
                 self.active_program.options[key].displayvalue = data.get('displayvalue')
                 #self.active_program = await self._async_fetch_programs('active')
-            if '/status/' in data['uri']:
-                if key in self.status:
-                    self.status[key].value = value
-                    self.status[key].name = data.get('name')
-                    self.status[key].displayvalue = data.get('displayvalue')
-                else:
-                    self.status = await self._async_fetch_status()
-            if '/settings/' in data['uri']:
-                if key in self.settings:
-                    self.settings[key].value = value
-                    self.settings[key].name = data.get('name')
-                    self.settings[key].displayvalue = data.get('displayvalue')
-                else:
-                    self.settings = await self._async_fetch_settings()
+
+            if key in self.status:
+                self.status[key].value = value
+                self.status[key].name = data.get('name')
+                self.status[key].displayvalue = data.get('displayvalue')
+            elif 'uri' in data and '/status/' in data['uri']:
+                self.status = await self._async_fetch_status()
+
+            if key in self.settings:
+                self.settings[key].value = value
+                self.settings[key].name = data.get('name')
+                self.settings[key].displayvalue = data.get('displayvalue')
+            elif 'uri' in data and '/settings/' in data['uri']:
+                self.settings = await self._async_fetch_settings()
+
 
         # Handle cases were the appliance data was loaded without getting all the programs
         if  (
