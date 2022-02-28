@@ -386,7 +386,9 @@ class Appliance():
         key:str = data['key']
         value = data['value']
 
-
+        if not self.connected:
+            # an event was received for a disconnected appliance, which means we didn't get the CONNECTED event, so reload the appliace data
+            await self.async_fetch_data()
         if key == 'BSH.Common.Root.SelectedProgram' and (not self.selected_program or self.selected_program.key != value):
             async with Synchronization.selected_program_lock:
                 # Have to check again after aquiring the lock
