@@ -47,6 +47,7 @@ class HomeConnectApi():
     def __init__(self, auth:AbstractAuth, lang:str=None):
         self._auth = auth
         self._lang = lang
+        self._call_counter = 0
 
 
     async def _async_request(self, method, endpoint, data=None) -> ApiResponse:
@@ -56,6 +57,9 @@ class HomeConnectApi():
         while retry:
             try:
                 response = await self._auth.request(method, endpoint, self._lang,  data=data)
+                self._call_counter += 1
+                _LOGGER.debug('HTTP %s %s (code=%d  count=%d)', method, endpoint, response.status, self._call_counter)
+
                 if response.status == 429:    # Too Many Requests
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
