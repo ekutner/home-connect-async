@@ -68,7 +68,7 @@ class HomeConnectApi():
                     result = self.ApiResponse(response, None)
                     return result
                 else:
-                    result = self.ApiResponse(response,  await response.json())
+                    result = self.ApiResponse(response,  await response.json(encoding='UTF-8'))
                     if result.status == 401 or result.status >= 500: # Unauthorized or service error
                         # This is probably caused by an expired token so the next retry will get a new one automatically
                         _LOGGER.debug("API got error code=%d key=%s - %d retries left", response.status, result.error_key, retry)
