@@ -68,6 +68,7 @@ class Option():
     stepsize:Optional[int] = None
     allowedvalues:Optional[list[str]] = None
     execution:Optional[str] = None
+    liveupdate:Optional[bool] = None
 
     @classmethod
     def create(cls, data:dict):
@@ -87,6 +88,7 @@ class Option():
             option.stepsize = constraints.get('stepsize')
             option.allowedvalues = constraints.get('allowedvalues')
             option.execution = constraints.get('execution')
+            option.liveupdate = constraints.get('liveupdate')
         return option
 
     def get_option_to_apply(self, value, exception_on_error=False):
@@ -165,27 +167,68 @@ class Appliance():
     status:dict[str, Status] = None
     settings:dict[str, Option] = None
     commands:dict[str, Command] = None
-    start_options:dict[str, Option] = None
+    startonly_options:dict[str, Option] = None
+    startonly_program:Optional[Program] = None
 
     # Internal fields
     _homeconnect:Optional[homeconnect.HomeConnect] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, decoder=lambda val: None, exclude=lambda val: True))
     _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _callbacks:Optional[callback_registery.CallbackRegistry] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
 
+
+    #region - Helper functions
+    def get_applied_program(self) -> Program|None:
+        """ gets the currently applied program which is the active or startonly or selected program """
+        if self.active_program:
+            return self.active_program
+        elif self.startonly_program:
+            return self.startonly_program
+        elif self.selected_program:
+            return self.selected_program
+        else:
+            return None
+
+    def get_applied_program_available_options(self) -> dict[Option]|None:
+        """ gets the available options for the applied program """
+        prog = self.get_applied_program()
+        if prog and self.available_programs and prog.key in self.available_programs:
+            return self.available_programs[prog.key].options
+        else:
+            return None
+
+    def get_applied_program_available_option(self, option_key:str) -> Option|None:
+        """ gets a specific available option for the applied program """
+        opts = self.get_applied_program_available_options()
+        if  option_key in opts:
+            return opts[option_key]
+        else:
+            return None
+
+    def is_available_program(self, program_key:str) -> bool:
+        """ Test if the specified program is currently available """
+        return self.available_programs and program_key in self.available_programs
+
+    def is_available_option(self, option_key:str) -> bool:
+        """ Test if the specified option key is currently available for the applied program """
+        opt = self.get_applied_program_available_option(option_key)
+        return opt is not None
+
+    #endregion
+
     #region - Manage Programs
     def set_start_option(self, option_key:str, value) -> None:
         """ Set an option that will be used when starting the program """
-        if not self.start_options:
-            self.start_options = {}
-        if option_key not in self.start_options:
-            self.start_options[option_key] = Option(option_key, value=value)
+        if not self.startonly_options:
+            self.startonly_options = {}
+        if option_key not in self.startonly_options:
+            self.startonly_options[option_key] = Option(option_key, value=value)
         else:
-            self.start_options[option_key].value = value
+            self.startonly_options[option_key].value = value
 
     def clear_start_option(self, option_key:str) -> None:
         """ Clear a previously set start option """
-        if self.start_options and option_key in self.start_options:
-            del self.start_options[option_key]
+        if self.startonly_options and option_key in self.startonly_options:
+            del self.startonly_options[option_key]
 
 
     async def async_get_active_program(self):
@@ -200,7 +243,7 @@ class Appliance():
         self.selected_program = prog
         return prog
 
-    async def async_select_program(self, key:str=None, options:Sequence[dict]=None, program:Program=None) -> bool:
+    async def async_select_program(self, key:str=None, options:Sequence[dict]=None, program:Program=None):
         """ Set the selected program
 
         Parameters:
@@ -208,16 +251,33 @@ class Appliance():
         options: Additional program options to set
         program: A Program object that represents the selected program. If used then "key" is ignored.
         """
-        if program is not None:
-            key = program.key
 
-        if key is None:
+        if key is None and program is None:
             _LOGGER.error('Either "program" or "key" must be specified')
-            return False
+            raise HomeConnectError('Either "program" or "key" must be specified')
+
+
+        if program is None:
+            if  self.available_programs and self.available_programs[key]:
+                program = self.available_programs[key]
+            else:
+                _LOGGER.error("The selected program key is not available")
+                raise HomeConnectError("The selected program key is not available")
+
+
+        key = program.key
+        previous_program = self.startonly_program if self.startonly_program else self.selected_program
+        if program.execution == 'startonly':
+            self.startonly_program = program
+            if previous_program.key != key:
+                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
+            return
+        else:
+            self.startonly_program = None
 
         async with Synchronization.selected_program_lock:
             res = await self._async_set_program(key, options, 'selected')
-            if res and (not self.selected_program or self.selected_program.key != key):
+            if res and (previous_program.key != key):
                 # There is a race condition between this and the selected program event
                 # so check if it was alreayd update so we don't call twice
                 # Note that this can't be dropped because the new options notification may arrive before the
@@ -241,11 +301,13 @@ class Appliance():
             program_key = program.key
 
         if not program_key:
-            if self.selected_program:
+            if self.startonly_program:
+                program_key = self.startonly_program.key
+            elif self.selected_program:
                 program_key = self.selected_program.key
             else:
                 _LOGGER.error('Either "program" or "key" must be specified')
-                return False
+                raise HomeConnectError('Either "program" or "key" must be specified')
 
         if not self.available_programs or program_key not in self.available_programs:
             _LOGGER.warning("The selected program in not one of the available programs (not supported by the API)")
@@ -253,13 +315,13 @@ class Appliance():
 
         if options is None:
             options = []
-            if self.selected_program and self.available_programs:
+            if self.selected_program and self.available_programs and not self.startonly_program:
                 for opt in self.selected_program.options.values():
-                    if opt.key in self.available_programs[program_key].options and (not self.start_options or opt.key not in self.start_options):
+                    if opt.key in self.available_programs[program_key].options and (not self.startonly_options or opt.key not in self.startonly_options):
                         option = { "key": opt.key, "value": opt.value}
                         options.append(option)
-            if self.start_options:
-                for opt in self.start_options.values():
+            if self.startonly_options:
+                for opt in self.startonly_options.values():
                     option = { "key": opt.key, "value": opt.value}
                     options.append(option)
 
@@ -302,6 +364,19 @@ class Appliance():
 
     async def async_set_option(self, option_key, value) -> bool:
         """ Set a value for a specific program option """
+        opt = self.get_applied_program_available_option(option_key)
+        if not opt:
+            _LOGGER.debug("Attempting to set unavailable option: %s", option_key)
+            _LOGGER.debug(self.available_programs)
+            raise ValueError("The option isn't currently available")
+
+        if opt.execution == "startonly":
+            if value:
+                self.set_start_option(option_key, value)
+            else:
+                self.clear_start_option(option_key)
+            return True
+
         return await self._async_set_service_value("options", option_key, value)
 
     async def async_apply_setting(self, setting_key, value) -> bool:
@@ -313,9 +388,14 @@ class Appliance():
         if service_type in ['settings', 'commands']:
             endpoint = f'{self._base_endpoint}/{service_type}/{key}'
         elif service_type == 'options':
-            endpoint = f'{self._base_endpoint}/programs/selected/options/{key}'
+            if self.active_program:
+                endpoint = f'{self._base_endpoint}/programs/active/options/{key}'
+            elif self.selected_program:
+                endpoint = f'{self._base_endpoint}/programs/selected/options/{key}'
+            else:
+                raise ValueError("No active/selected program to apply the options to")
         else:
-            raise ValueError(f"Unsupported service_type value: {service_type}")
+            raise ValueError(f"Unsupported service_type value: '{service_type}'")
 
         command = {
             "data": {
@@ -405,6 +485,7 @@ class Appliance():
             ( key in ['BSH.Common.Option.ProgramProgress', 'BSH.Common.Option.RemainingProgramTime'] and not self.active_program ):
             # apparently it is possible to get progress notifications without getting the ActiveProgram event first so we handle that
             self.active_program = await self._async_fetch_programs('active')
+            self.available_programs = await self._async_fetch_programs('available')
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
@@ -570,13 +651,6 @@ class Appliance():
             _LOGGER.debug("Unexpected exception in Appliance.async_fetch_data", exc_info=ex)
             raise HomeConnectError("Unexpected exception in Appliance.async_fetch_data", inner_exception=ex)
 
-    # async def _async_fetch_available_programs(self):
-    #     """ Get the available programs and the options for the current program """
-    #     available_prgrams = await self._async_fetch_programs("available")
-    #     program_key = self.active_program.key if self.active_program else self.selected_program.key if self.selected_program else None
-    #     if available_prgrams and program_key in available_prgrams:
-    #         available_prgrams[program_key].options = await self._async_fetch_available_options(program_key)
-    #     return available_prgrams
 
     async def _async_fetch_programs(self, program_type:str):
         """ Main function to fetch the different kinds of programs with their options from the cloud service """
@@ -601,8 +675,8 @@ class Appliance():
             if 'options' in p:
                 options = self.optionlist_to_dict(p['options'])
                 _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, prog.key)
-            elif program_type=='available' and prog.key == current_program_key:
-                options = await self._async_fetch_available_options(p['key'])
+            elif program_type=='available' and (prog.key == current_program_key or prog.execution == 'startonly'):
+                options = await self._async_fetch_available_options(prog.key)
             else:
                 options = None
             prog.options = options
