@@ -469,7 +469,10 @@ class Appliance():
         if not self.connected:
             # an event was received for a disconnected appliance, which means we didn't get the CONNECTED event, so reload the appliace data
             await self.async_fetch_data()
+            await self._callbacks.async_broadcast_event(self, Events.PAIRED)
+            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         if key == 'BSH.Common.Root.SelectedProgram' and (not self.selected_program or self.selected_program.key != value):
+            # handle selected program
             async with Synchronization.selected_program_lock:
                 # Have to check again after aquiring the lock
                 if key == 'BSH.Common.Root.SelectedProgram' and (not self.selected_program or self.selected_program.key != value):
@@ -481,37 +484,58 @@ class Appliance():
                         self.selected_program = None
                         self.available_programs = await self._async_fetch_programs('available')
                     await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif (key == 'BSH.Common.Root.ActiveProgram' and value) or \
-            ( key in ['BSH.Common.Option.ProgramProgress', 'BSH.Common.Option.RemainingProgramTime'] and not self.active_program ):
-            # apparently it is possible to get progress notifications without getting the ActiveProgram event first so we handle that
+        elif ( (key == 'BSH.Common.Root.ActiveProgram' and value) or
+                # apparently it is possible to get progress notifications without getting the ActiveProgram event first so we handle that
+                (key in ['BSH.Common.Option.ProgramProgress', 'BSH.Common.Option.RemainingProgramTime']) or
+                # it is also possible to get operation state Run without getting the ActiveProgram event
+                (key == 'BSH.Common.Status.OperationState' and value=='BSH.Common.EnumType.OperationState.Run')
+            ) and not self.active_program:  #
+            # handle program start
             self.active_program = await self._async_fetch_programs('active')
             self.available_programs = await self._async_fetch_programs('available')
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif ( (key == 'BSH.Common.Root.ActiveProgram' and not value) or (key == 'BSH.Common.Event.ProgramFinished') ) and self.active_program:
+        elif ( (key == 'BSH.Common.Root.ActiveProgram' and not value) or
+               (key == 'BSH.Common.Status.OperationState' and value=='BSH.Common.EnumType.OperationState.Ready') or
+               (key == 'BSH.Common.Event.ProgramFinished')
+            ) and self.active_program:
+            # handle program end
             self.active_program = None
             self.commands = await self._async_fetch_commands()
             self.available_programs = await self._async_fetch_programs('available')
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        elif key == 'BSH.Common.Status.OperationState' and self.status.get('BSH.Common.Status.OperationState') != value:
+        elif key == 'BSH.Common.Status.OperationState' and \
+             value!='BSH.Common.EnumType.OperationState.Run' and \
+             self.status.get('BSH.Common.Status.OperationState') != value:
             # ignore repeat notifiations of the same state
             await self.async_fetch_data(include_static_data=False)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif key =='BSH.Common.Status.RemoteControlStartAllowed':
+            self.available_programs = await self._async_fetch_programs('available')
+            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        elif ( not self.available_programs or len(self.available_programs) < 2) and \
+             ( key in ['BSH.Common.Status.OperationState', 'BSH.Common.Status.RemoteControlActive'] ) and \
+             ( 'BSH.Common.Status.OperationState' not in self.status or self.status['BSH.Common.Status.OperationState'].value == 'BSH.Common.EnumType.OperationState.Ready' ) and \
+             ( 'BSH.Common.Status.RemoteControlActive' not in self.status or self.status['BSH.Common.Status.RemoteControlActive'].value):
+            # Handle cases were the appliance data was loaded without getting all the programs (for example when HA is restarted while a program is active)
+            # If the state is Ready and remote control is possible and we didn't load the available programs before then load them now
+            available_programs = await self._async_fetch_programs("available")
+            if available_programs:
+                self.available_programs = available_programs
+                await self._callbacks.async_broadcast_event(self, Events.PAIRED)
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         else:
             # update options, statuses and settings in the data model
-            # In all the below cases we have to call the API because the friendly names are not included in the event data
             if self.selected_program and key in self.selected_program.options:
                 self.selected_program.options[key].value = value
                 self.selected_program.options[key].name = data.get('name')
                 self.selected_program.options[key].displayvalue = data.get('displayvalue')
-                #self.selected_program = await self._async_fetch_programs('selected')
             if self.active_program and key in self.active_program.options:
                 self.active_program.options[key].value = value
                 self.active_program.options[key].name = data.get('name')
                 self.active_program.options[key].displayvalue = data.get('displayvalue')
-                #self.active_program = await self._async_fetch_programs('active')
 
             if key in self.status:
                 self.status[key].value = value
@@ -519,6 +543,7 @@ class Appliance():
                 self.status[key].displayvalue = data.get('displayvalue')
             elif 'uri' in data and '/status/' in data['uri']:
                 self.status = await self._async_fetch_status()
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
             if key in self.settings:
                 self.settings[key].value = value
@@ -526,27 +551,9 @@ class Appliance():
                 self.settings[key].displayvalue = data.get('displayvalue')
             elif 'uri' in data and '/settings/' in data['uri']:
                 self.settings = await self._async_fetch_settings()
-
-
-        # Handle cases were the appliance data was loaded without getting all the programs
-        if  (
-                key in ['BSH.Common.Status.OperationState', 'BSH.Common.Status.RemoteControlActive']
-            ) and (
-                'BSH.Common.Status.OperationState' not in self.status
-                or self.status['BSH.Common.Status.OperationState'].value == 'BSH.Common.EnumType.OperationState.Ready'
-             ) and (
-                'BSH.Common.Status.RemoteControlActive' not in self.status
-                 or self.status['BSH.Common.Status.RemoteControlActive'].value
-            ) and (
-                not self.available_programs or len(self.available_programs) < 2
-            ):
-            # If the state is Ready and remote control is possible and we didn't load the available programs before then load them now
-            available_programs = await self._async_fetch_programs("available")
-            if available_programs:
-                self.available_programs = available_programs
-                await self._callbacks.async_broadcast_event(self, Events.PAIRED)
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
+        # broadcast the specific event that was received
         await self._callbacks.async_broadcast_event(self, key, value)
 
     def register_callback(self, callback:Callable[[Appliance, str, any], None], keys:str|Sequence[str] ) -> None:
@@ -634,13 +641,9 @@ class Appliance():
             #             self.status['BSH.Common.Status.OperationState'].value if 'BSH.Common.Status.OperationState' in self.status else None,
             #             str(self.status['BSH.Common.Status.RemoteControlActive'].value) if 'BSH.Common.Status.RemoteControlActive' in self.status else None )
 
-
-
             _LOGGER.debug("Finished loading appliance data for %s (%s)", self.name, self.haId)
             if not self.connected:
                 await self.async_set_connection_state(True)
-            else:
-                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         except HomeConnectError as ex:
             if ex.error_key:
                 delay = delay + 60 if delay<300 else 300

@@ -3,7 +3,7 @@ from distutils.core import setup
 setup(
     name = 'home-connect-async',
     packages = ['home_connect_async'],
-    version = '0.7.0-b1',
+    version = '0.7.0-b2',
     license='MIT',
     description = 'Async SDK for BSH Home Connect API',
     author = 'Eran Kutner',
