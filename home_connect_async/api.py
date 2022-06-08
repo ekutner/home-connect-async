@@ -6,7 +6,7 @@ from collections.abc import Callable
 from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
-from .common import HomeConnectError
+from .common import HomeConnectError, GlobalStatus
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,7 +63,9 @@ class HomeConnectApi():
                 if response.status == 429:    # Too Many Requests
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
+                    GlobalStatus.set_status(GlobalStatus.Status.BLOCKED, wait_time)
                     await asyncio.sleep(int(wait_time)+1)
+                    GlobalStatus.set_status(GlobalStatus.Status.UNBLOCKED)
                 elif method in ["put", "delete"] and response.status == 204:
                     result = self.ApiResponse(response, None)
                     return result

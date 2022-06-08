@@ -14,7 +14,7 @@ from dataclasses_json import Undefined, config, DataClassJsonMixin
 from aiohttp_sse_client.client import MessageEvent
 
 from .const import Events
-from .common import HomeConnectError
+from .common import HomeConnectError, GlobalStatus
 from .callback_registery import CallbackRegistry
 from .appliance import Appliance
 from .auth import AuthManager
@@ -29,15 +29,15 @@ class HomeConnect(DataClassJsonMixin):
     """ The main class that wraps the whole data model,
     coordinates the loading of data from the cloud service and listens for update events
     """
-    class HomeConnectStatus(IntFlag):
-        """ Enum for the current status of the Home Connect data loading process """
-        INIT = 0
-        LOADING = 1
-        LOADED = 3
-        UPDATES = 4
-        NOUPDATES = ~4
-        READY = 7
-        LOADING_FAILED = 8
+    # class HomeConnectStatus(IntFlag):
+    #     """ Enum for the current status of the Home Connect data loading process """
+    #     INIT = 0
+    #     LOADING = 1
+    #     LOADED = 3
+    #     UPDATES = 4
+    #     NOUPDATES = ~4
+    #     READY = 7
+    #     LOADING_FAILED = 8
 
 
     class RefreshMode(Enum):
@@ -53,11 +53,11 @@ class HomeConnect(DataClassJsonMixin):
 
     # The data calss fields
     appliances:dict[str, Appliance] = field(default_factory=dict)
-    status:HomeConnect.HomeConnectStatus = \
-        field(
-            default=HomeConnectStatus.INIT,
-            metadata=config(encoder = lambda val: val.name, exclude = lambda val: True)
-        )
+    # status:HomeConnect.HomeConnectStatus = \
+    #     field(
+    #         default=HomeConnectStatus.INIT,
+    #         metadata=config(encoder = lambda val: val.name, exclude = lambda val: True)
+    #     )
 
 
     # Internal fields - not serialized to JSON
@@ -92,7 +92,7 @@ class HomeConnect(DataClassJsonMixin):
         if json_data:
             try:
                 hc = HomeConnect.from_json(json_data)
-                hc.status = cls.HomeConnectStatus.INIT
+                #hc.status = cls.HomeConnectStatus.INIT
                 # manually initialize the appliances because they were created from json
                 for appliance in hc.appliances.values():
                     appliance._homeconnect = hc
@@ -138,7 +138,9 @@ class HomeConnect(DataClassJsonMixin):
         on_error:Callable[[HomeConnect, Exception], None] = None
     ) -> None:
         """ Loads or just refreshes the data model from the cloud service """
-        self.status |= self.HomeConnectStatus.LOADING
+        #self.status |= self.HomeConnectStatus.LOADING
+        GlobalStatus.set_status(GlobalStatus.Status.RUNNING)
+        GlobalStatus.unset_status(GlobalStatus.Status.LOADING_FAILED)
 
         try:
             if refresh == self.RefreshMode.NOTHING:
@@ -179,10 +181,12 @@ class HomeConnect(DataClassJsonMixin):
                         await self._callbacks.async_broadcast_event(self.appliances[haId], Events.DEPAIRED)
                         del self.appliances[haId]
 
-            self.status |= self.HomeConnectStatus.LOADED
+            #self.status |= self.HomeConnectStatus.LOADED
+            GlobalStatus.set_status(GlobalStatus.Status.LOADED)
         except Exception as ex:
             _LOGGER.warning("Failed to load data from Home Connect (%s)", str(ex), exc_info=ex)
-            self.status = self.HomeConnectStatus.LOADING_FAILED
+            #self.status = self.HomeConnectStatus.LOADING_FAILED
+            GlobalStatus.set_status(GlobalStatus.Status.LOADING_FAILED)
             if on_error:
                 if inspect.iscoroutinefunction(on_error):
                     await on_error(self, ex)
@@ -253,7 +257,8 @@ class HomeConnect(DataClassJsonMixin):
                 _LOGGER.debug("Connecting to SSE stream")
                 event_source = await self._api.async_get_event_stream('/api/homeappliances/events')
                 await event_source.connect()
-                self.status |= self.HomeConnectStatus.UPDATES
+                #self.status |= self.HomeConnectStatus.UPDATES
+                GlobalStatus.set_status(GlobalStatus.Status.UPDATES)
 
                 async for event in event_source:
                     _LOGGER.debug("Received event from SSE stream: %s", str(event))
@@ -265,10 +270,12 @@ class HomeConnect(DataClassJsonMixin):
             except asyncio.CancelledError:
                 break
             except ConnectionRefusedError as ex:
-                self.status &= self.HomeConnectStatus.NOUPDATES
+                #self.status &= self.HomeConnectStatus.NOUPDATES
+                GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
                 _LOGGER.debug('ConnectionRefusedError in SSE connection refused. Will try again', exc_info=ex)
             except ConnectionError as ex:
-                self.status &= self.HomeConnectStatus.NOUPDATES
+                #self.status &= self.HomeConnectStatus.NOUPDATES
+                GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
                 error_code = parse_sse_error(ex.args[0])
                 if error_code == 429:
                     backoff *= 2
@@ -286,7 +293,8 @@ class HomeConnect(DataClassJsonMixin):
                 # it is expected that the connection will time out every hour
                 _LOGGER.debug("The SSE connection timeed-out, will renew and retry")
             except Exception as ex:
-                self.status &= self.HomeConnectStatus.NOUPDATES
+                #self.status &= self.HomeConnectStatus.NOUPDATES
+                GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
                 _LOGGER.debug('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
                 await asyncio.sleep(backoff)
                 backoff *= 2
@@ -297,7 +305,8 @@ class HomeConnect(DataClassJsonMixin):
                     await event_source.close()
                     event_source = None
 
-        self.status &= self.HomeConnectStatus.NOUPDATES
+        #self.status &= self.HomeConnectStatus.NOUPDATES
+        GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
         _LOGGER.debug("Exiting SSE event stream")
 
 
