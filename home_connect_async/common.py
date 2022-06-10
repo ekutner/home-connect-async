@@ -62,9 +62,9 @@ class GlobalStatus:
     def get_status(cls) -> Status:
         """ Get the status """
         if cls._status & cls.Status.BLOCKED:
-            return "BLOCKED"
+            return cls.Status.BLOCKED
         elif cls._status & cls.Status.LOADING_FAILED:
-            return "LOADING_FAILED"
+            return cls.Status.LOADING_FAILED
         return cls._status
 
     @classmethod
@@ -78,8 +78,10 @@ class GlobalStatus:
                 hours = delta //3600
                 minutes = (delta - hours*3600) // 60
                 return f"Blocked for {hours}:{minutes:02}h"
+        elif cls._status & cls.Status.LOADING_FAILED:
+            return cls.Status.LOADING_FAILED.name
         else:
-            return str(cls._status.name)
+            return cls._status.name
 
 
 

@@ -269,7 +269,7 @@ class Appliance():
         previous_program = self.startonly_program if self.startonly_program else self.selected_program
         if program.execution == 'startonly':
             self.startonly_program = program
-            if previous_program.key != key:
+            if not previous_program or previous_program.key != key:
                 await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
             return
         else:
@@ -489,7 +489,8 @@ class Appliance():
                 (key in ['BSH.Common.Option.ProgramProgress', 'BSH.Common.Option.RemainingProgramTime']) or
                 # it is also possible to get operation state Run without getting the ActiveProgram event
                 (key == 'BSH.Common.Status.OperationState' and value=='BSH.Common.EnumType.OperationState.Run')
-            ) and not self.active_program:  #
+            ) and \
+            (not self.active_program or (key == 'BSH.Common.Root.ActiveProgram' and self.active_program.key != value) ) :
             # handle program start
             self.active_program = await self._async_fetch_programs('active')
             self.available_programs = await self._async_fetch_programs('available')
