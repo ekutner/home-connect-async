@@ -199,7 +199,7 @@ class Appliance():
     def get_applied_program_available_option(self, option_key:str) -> Option|None:
         """ gets a specific available option for the applied program """
         opts = self.get_applied_program_available_options()
-        if  option_key in opts:
+        if opts and option_key in opts:
             return opts[option_key]
         else:
             return None
@@ -333,7 +333,6 @@ class Appliance():
             await self.async_get_active_program()
         if self.active_program:
             endpoint = f'{self._base_endpoint}/programs/active'
-            _LOGGER.debug("Calling %s with delete verb", endpoint)
             response = await self._api.async_delete(endpoint)
             if response.status == 204:
                 return True
@@ -404,7 +403,6 @@ class Appliance():
             }
         }
         jscmd = json.dumps(command, indent=2)
-        _LOGGER.debug("Calling %s with:\n%s", endpoint, jscmd)
         response = await self._api.async_put(endpoint, jscmd)
         if response.status == 204:
             return True
@@ -430,7 +428,6 @@ class Appliance():
                 command['data']['options'] = options
 
             jscmd = json.dumps(command, indent=2)
-            _LOGGER.debug("Calling %s with:\n%s", endpoint, jscmd)
             response = await self._api.async_put(endpoint, jscmd)
             if response.status == 204:
                 return True
