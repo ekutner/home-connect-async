@@ -6,7 +6,7 @@ from collections.abc import Callable
 from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
-from .common import HomeConnectError, GlobalStatus
+from .common import HomeConnectError, GlobalStatus, LogMode
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,10 +44,11 @@ class HomeConnectApi():
             return None
 
 
-    def __init__(self, auth:AbstractAuth, lang:str=None):
+    def __init__(self, auth:AbstractAuth, lang:str=None, log_mode:LogMode=None):
         self._auth = auth
         self._lang = lang
         self._call_counter = 0
+        self._log_mode = log_mode
 
 
     async def _async_request(self, method, endpoint, data=None) -> ApiResponse:
@@ -58,8 +59,17 @@ class HomeConnectApi():
             try:
                 response = await self._auth.request(method, endpoint, self._lang,  data=data)
                 self._call_counter += 1
-                _LOGGER.debug('HTTP %s %s (code=%d  count=%d)', method, endpoint, response.status, self._call_counter)
-
+                if self._log_mode and (self._log_mode & LogMode.REQUESTS) and (self._log_mode & LogMode.RESPONSES):
+                    if data:
+                        _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\n%s\nResponse ====>\n%s", method, endpoint, response.status, 4-retry, self._call_counter, data, await response.text(encoding="UTF-8"))
+                    else:
+                        _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\nResponse ====>\n%s", method, endpoint, response.status, 4-retry, self._call_counter, await response.text(encoding="UTF-8"))
+                elif self._log_mode and (self._log_mode & LogMode.REQUESTS) and data:
+                    _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\n%s", method, endpoint, response.status, 4-retry, self._call_counter, data)
+                elif self._log_mode and (self._log_mode & LogMode.RESPONSES):
+                    _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\nResponse ====>\n%s", method, endpoint, response.status,4-retry, self._call_counter, await response.text(encoding="UTF-8"))
+                else:
+                    _LOGGER.debug("HTTP %s %s [%d]  (try=%d count=%d)", method, endpoint, response.status, 4-retry, self._call_counter)
                 if response.status == 429:    # Too Many Requests
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
@@ -79,7 +89,7 @@ class HomeConnectApi():
                             _LOGGER.debug("API call failed with code=%d error=%s", response.status, result.error_key)
                         return result
             except Exception as ex:
-                _LOGGER.debug("API call to HomeConnect service failed", exc_info=ex)
+                _LOGGER.debug("HTTP call failed %s %s", method, endpoint, exc_info=ex)
                 if not retry:
                     raise HomeConnectError("API call to HomeConnect service failed", code=901, inner_exception=ex) from ex
             finally:

@@ -14,7 +14,7 @@ from dataclasses_json import Undefined, config, DataClassJsonMixin
 from aiohttp_sse_client.client import MessageEvent
 
 from .const import Events
-from .common import HomeConnectError, GlobalStatus
+from .common import HomeConnectError, GlobalStatus, LogMode
 from .callback_registery import CallbackRegistry
 from .appliance import Appliance
 from .auth import AuthManager
@@ -29,16 +29,6 @@ class HomeConnect(DataClassJsonMixin):
     """ The main class that wraps the whole data model,
     coordinates the loading of data from the cloud service and listens for update events
     """
-    # class HomeConnectStatus(IntFlag):
-    #     """ Enum for the current status of the Home Connect data loading process """
-    #     INIT = 0
-    #     LOADING = 1
-    #     LOADED = 3
-    #     UPDATES = 4
-    #     NOUPDATES = ~4
-    #     READY = 7
-    #     LOADING_FAILED = 8
-
 
     class RefreshMode(Enum):
         """ Enum for the supported data refresh modes """
@@ -46,7 +36,6 @@ class HomeConnect(DataClassJsonMixin):
         VALIDATE = 1
         DYNAMIC_ONLY = 2
         ALL = 3
-
 
     # This is a class variable used as configuration for the dataclass_json
     dataclass_json_config:ClassVar[config] = config(undefined=Undefined.EXCLUDE)
@@ -73,7 +62,8 @@ class HomeConnect(DataClassJsonMixin):
         delayed_load:bool=False,
         refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
         auto_update:bool=False,
-        lang:str=None) -> HomeConnect:
+        lang:str=None,
+        log_mode:LogMode=None) -> HomeConnect:
         """ Factory for creating a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
 
         Parameters:
@@ -87,7 +77,7 @@ class HomeConnect(DataClassJsonMixin):
 
         If auto_update is set to False then subscribe_for_updates() should be called to receive real-time updates to the data
         """
-        api = HomeConnectApi(am, lang)
+        api = HomeConnectApi(am, lang, log_mode)
         hc:HomeConnect = None
         if json_data:
             try:

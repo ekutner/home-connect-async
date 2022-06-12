@@ -4,6 +4,11 @@ import asyncio
 from datetime import datetime, timedelta
 from enum import IntFlag
 
+class LogMode(IntFlag):
+    """ Enum to control special logging """
+    NONE = 0
+    REQUESTS = 1
+    RESPONSES = 2
 
 class HomeConnectError(Exception):
     """ Common exception class for the SDK """
