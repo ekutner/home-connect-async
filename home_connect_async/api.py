@@ -51,8 +51,9 @@ class HomeConnectApi():
         self._log_mode = log_mode
 
 
-    async def _async_request(self, method, endpoint, data=None) -> ApiResponse:
+    async def _async_request(self, method:str, endpoint:str, data=None) -> ApiResponse:
         """ Main function to call the Home Connect API over HTTPS """
+        method = method.capitalize()
         retry = 3
         response = None
         while retry:

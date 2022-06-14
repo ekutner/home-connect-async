@@ -69,6 +69,7 @@ class Option():
     allowedvalues:Optional[list[str]] = None
     execution:Optional[str] = None
     liveupdate:Optional[bool] = None
+    access:Optional[str] = None
 
     @classmethod
     def create(cls, data:dict):
@@ -89,6 +90,7 @@ class Option():
             option.allowedvalues = constraints.get('allowedvalues')
             option.execution = constraints.get('execution')
             option.liveupdate = constraints.get('liveupdate')
+            option.access = constraints.get('access')
         return option
 
     def get_option_to_apply(self, value, exception_on_error=False):
@@ -267,8 +269,9 @@ class Appliance():
 
         key = program.key
         previous_program = self.startonly_program if self.startonly_program else self.selected_program
-        if program.execution == 'startonly':
+        if program.execution == 'startonly' and not self.active_program:
             self.startonly_program = program
+            _LOGGER.debug("Setting startonly_program=%s", program.key)
             if not previous_program or previous_program.key != key:
                 await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
             return
@@ -276,14 +279,21 @@ class Appliance():
             self.startonly_program = None
 
         async with Synchronization.selected_program_lock:
-            res = await self._async_set_program(key, options, 'selected')
+            if self.active_program:
+                res = await self._async_set_program(key, options, 'active')
+            else:
+                res = await self._async_set_program(key, options, 'selected')
             if res and (previous_program.key != key):
                 # There is a race condition between this and the selected program event
                 # so check if it was alreayd update so we don't call twice
                 # Note that this can't be dropped because the new options notification may arrive before the
                 # program selected event and then the option values will not match the values that were there for the
                 # previous program
-                self.selected_program = await self._async_fetch_programs('selected')
+                if self.active_program:
+                    self.active_program = await self._async_fetch_programs('active')
+                else:
+                    self.selected_program = await self._async_fetch_programs('selected')
+                # TODO: Consider if the above updates can be removed or if adding available_programs is required
                 self.available_programs = await self._async_fetch_programs('available')
                 await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
