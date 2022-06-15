@@ -41,7 +41,7 @@ class AbstractAuth(ABC):
         headers['Accept'] = 'application/vnd.bsh.sdk.v1+json'
         if lang:
             headers['Accept-Language'] = lang
-        if method == 'put':
+        if method == 'PUT':
             headers['Content-Type'] = 'application/vnd.bsh.sdk.v1+json'
 
         return await self.websession.request(
