@@ -77,7 +77,7 @@ class HomeConnectApi():
                     GlobalStatus.set_status(GlobalStatus.Status.BLOCKED, int(wait_time))
                     await asyncio.sleep(int(wait_time)+1)
                     GlobalStatus.unset_status(GlobalStatus.Status.BLOCKED)
-                elif method in ["put", "delete"] and response.status == 204:
+                elif method in ["PUT", "DELETE"] and response.status == 204:
                     result = self.ApiResponse(response, None)
                     return result
                 else:
@@ -105,15 +105,15 @@ class HomeConnectApi():
 
     async def async_get(self, endpoint) -> ApiResponse:
         """ Implements a HTTP GET request """
-        return await self._async_request('get', endpoint)
+        return await self._async_request('GET', endpoint)
 
     async def async_put(self, endpoint:str, data:str) -> ApiResponse:
         """ Implements a HTTP PUT request """
-        return await self._async_request('put', endpoint, data=data)
+        return await self._async_request('PUT', endpoint, data=data)
 
     async def async_delete(self, endpoint:str) -> ApiResponse:
         """ Implements a HTTP DELETE request """
-        return await self._async_request('delete', endpoint)
+        return await self._async_request('DELETE', endpoint)
 
     async def async_get_event_stream(self, endpoint):
         """ Returns a Server Sent Events (SSE) stream to be consumed by the caller """
