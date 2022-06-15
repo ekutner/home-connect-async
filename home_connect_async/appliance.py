@@ -478,6 +478,34 @@ class Appliance():
             await self.async_fetch_data()
             await self._callbacks.async_broadcast_event(self, Events.PAIRED)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+        else:
+            # update options, statuses and settings in the data model
+            if self.selected_program and self.selected_program.options and key in self.selected_program.options:
+                self.selected_program.options[key].value = value
+                self.selected_program.options[key].name = data.get('name')
+                self.selected_program.options[key].displayvalue = data.get('displayvalue')
+            if self.active_program and self.active_program.options and key in self.active_program.options:
+                self.active_program.options[key].value = value
+                self.active_program.options[key].name = data.get('name')
+                self.active_program.options[key].displayvalue = data.get('displayvalue')
+
+            if key in self.status:
+                self.status[key].value = value
+                self.status[key].name = data.get('name')
+                self.status[key].displayvalue = data.get('displayvalue')
+            elif 'uri' in data and '/status/' in data['uri']:
+                self.status = await self._async_fetch_status()
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+
+            if key in self.settings:
+                self.settings[key].value = value
+                self.settings[key].name = data.get('name')
+                self.settings[key].displayvalue = data.get('displayvalue')
+            elif 'uri' in data and '/settings/' in data['uri']:
+                self.settings = await self._async_fetch_settings()
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+
+        # Fetch data from the API on major events
         if key == 'BSH.Common.Root.SelectedProgram' and (not self.selected_program or self.selected_program.key != value):
             # handle selected program
             async with Synchronization.selected_program_lock:
@@ -516,8 +544,7 @@ class Appliance():
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key == 'BSH.Common.Status.OperationState' and \
              value!='BSH.Common.EnumType.OperationState.Run' and \
-             self.status.get('BSH.Common.Status.OperationState') != value:
-            # ignore repeat notifiations of the same state
+             self.status.get('BSH.Common.Status.OperationState') != value:  # ignore repeat notifiations of the same state
             await self.async_fetch_data(include_static_data=False)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key =='BSH.Common.Status.RemoteControlStartAllowed':
@@ -533,32 +560,6 @@ class Appliance():
             if available_programs:
                 self.available_programs = available_programs
                 await self._callbacks.async_broadcast_event(self, Events.PAIRED)
-                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-        else:
-            # update options, statuses and settings in the data model
-            if self.selected_program and key in self.selected_program.options:
-                self.selected_program.options[key].value = value
-                self.selected_program.options[key].name = data.get('name')
-                self.selected_program.options[key].displayvalue = data.get('displayvalue')
-            if self.active_program and key in self.active_program.options:
-                self.active_program.options[key].value = value
-                self.active_program.options[key].name = data.get('name')
-                self.active_program.options[key].displayvalue = data.get('displayvalue')
-
-            if key in self.status:
-                self.status[key].value = value
-                self.status[key].name = data.get('name')
-                self.status[key].displayvalue = data.get('displayvalue')
-            elif 'uri' in data and '/status/' in data['uri']:
-                self.status = await self._async_fetch_status()
-                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
-
-            if key in self.settings:
-                self.settings[key].value = value
-                self.settings[key].name = data.get('name')
-                self.settings[key].displayvalue = data.get('displayvalue')
-            elif 'uri' in data and '/settings/' in data['uri']:
-                self.settings = await self._async_fetch_settings()
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         # broadcast the specific event that was received
