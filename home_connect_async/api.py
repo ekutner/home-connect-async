@@ -58,19 +58,32 @@ class HomeConnectApi():
         response = None
         while retry:
             try:
-                response = await self._auth.request(method, endpoint, self._lang,  data=data)
                 self._call_counter += 1
-                if self._log_mode and (self._log_mode & LogMode.REQUESTS) and (self._log_mode & LogMode.RESPONSES):
+
+                if self._log_mode and (self._log_mode & LogMode.REQUESTS):
                     if data:
-                        _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\n%s\nResponse ====>\n%s", method, endpoint, response.status, 4-retry, self._call_counter, data, await response.text(encoding="UTF-8"))
+                        _LOGGER.debug("\nHTTP %s %s (try=%d count=%d)\n%s\n", method, endpoint, 4-retry, self._call_counter, data)
                     else:
-                        _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\nResponse ====>\n%s", method, endpoint, response.status, 4-retry, self._call_counter, await response.text(encoding="UTF-8"))
-                elif self._log_mode and (self._log_mode & LogMode.REQUESTS) and data:
-                    _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\n%s", method, endpoint, response.status, 4-retry, self._call_counter, data)
-                elif self._log_mode and (self._log_mode & LogMode.RESPONSES):
-                    _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\nResponse ====>\n%s", method, endpoint, response.status,4-retry, self._call_counter, await response.text(encoding="UTF-8"))
+                        _LOGGER.debug("\nHTTP %s %s (try=%d count=%d)\n", method, endpoint, 4-retry, self._call_counter)
+
+                response = await self._auth.request(method, endpoint, self._lang,  data=data)
+
+
+                # if self._log_mode and (self._log_mode & LogMode.REQUESTS) and (self._log_mode & LogMode.RESPONSES):
+                #     _LOGGER.debug("\nHTTP RESPONSE [%d] (try=%d count=%d) ====>\n%s\n", response.status,4-retry, self._call_counter, await response.text(encoding="UTF-8"))
+                #     if data:
+                #         _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\n%s\nResponse ====>\n%s", method, endpoint, response.status, 4-retry, self._call_counter, data, await response.text(encoding="UTF-8"))
+                #     else:
+                #         _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\nResponse ====>\n%s", method, endpoint, response.status, 4-retry, self._call_counter, await response.text(encoding="UTF-8"))
+                # elif self._log_mode and (self._log_mode & LogMode.REQUESTS) and data:
+                #     _LOGGER.debug("\nHTTP %s %s [%d] (try=%d count=%d)\n%s", method, endpoint, response.status, 4-retry, self._call_counter, data)
+                if self._log_mode and (self._log_mode & LogMode.RESPONSES):
+                    if response.content_length and response.content_length>0:
+                        _LOGGER.debug("\nHTTP %s %s (try=%d count=%d) [%d %s] ====>\n%s\n", method, endpoint, 4-retry, self._call_counter, response.status, response.reason, await response.text(encoding="UTF-8"))
+                    else:
+                        _LOGGER.debug("\nHTTP %s %s (try=%d count=%d) [%d %s]\n", method, endpoint, 4-retry, self._call_counter, response.status, response.reason)
                 else:
-                    _LOGGER.debug("HTTP %s %s [%d]  (try=%d count=%d)", method, endpoint, response.status, 4-retry, self._call_counter)
+                    _LOGGER.debug("HTTP %s %s (try=%d count=%d) [%d]", method, endpoint, 4-retry, self._call_counter, response.status)
                 if response.status == 429:    # Too Many Requests
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
