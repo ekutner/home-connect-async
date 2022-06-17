@@ -218,7 +218,15 @@ class Appliance():
     #endregion
 
     #region - Manage Programs
-    def set_start_option(self, option_key:str, value) -> None:
+    def set_startonly_program(self, program_key:str) -> None:
+        """ Set a program that can only ne started but not selected """
+        self.startonly_program = Program(program_key)
+
+    def clear_startonly_program(self) -> None:
+        """ Clear a previously set startonly program """
+        self.startonly_program = None
+
+    def set_startonly_option(self, option_key:str, value) -> None:
         """ Set an option that will be used when starting the program """
         if not self.startonly_options:
             self.startonly_options = {}
@@ -227,11 +235,10 @@ class Appliance():
         else:
             self.startonly_options[option_key].value = value
 
-    def clear_start_option(self, option_key:str) -> None:
-        """ Clear a previously set start option """
+    def clear_startonly_option(self, option_key:str) -> None:
+        """ Clear a previously set startonly option """
         if self.startonly_options and option_key in self.startonly_options:
             del self.startonly_options[option_key]
-
 
     async def async_get_active_program(self):
         """ Get the active program """
@@ -283,7 +290,7 @@ class Appliance():
                 res = await self._async_set_program(key, options, 'active')
             else:
                 res = await self._async_set_program(key, options, 'selected')
-            if res and (previous_program.key != key):
+            if res and (not previous_program or previous_program.key != key):
                 # There is a race condition between this and the selected program event
                 # so check if it was alreayd update so we don't call twice
                 # Note that this can't be dropped because the new options notification may arrive before the
@@ -293,7 +300,7 @@ class Appliance():
                     self.active_program = await self._async_fetch_programs('active')
                 else:
                     self.selected_program = await self._async_fetch_programs('selected')
-                # TODO: Consider if the above updates can be removed or if adding available_programs is required
+                #TODO: Consider if the above updates can be removed or if adding available_programs is required
                 self.available_programs = await self._async_fetch_programs('available')
                 await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
@@ -381,9 +388,9 @@ class Appliance():
 
         if opt.execution == "startonly":
             if value:
-                self.set_start_option(option_key, value)
+                self.set_startonly_option(option_key, value)
             else:
-                self.clear_start_option(option_key)
+                self.clear_startonly_option(option_key)
             return True
 
         return await self._async_set_service_value("options", option_key, value)
