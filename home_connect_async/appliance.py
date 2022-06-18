@@ -218,14 +218,6 @@ class Appliance():
     #endregion
 
     #region - Manage Programs
-    def set_startonly_program(self, program_key:str) -> None:
-        """ Set a program that can only ne started but not selected """
-        self.startonly_program = Program(program_key)
-
-    def clear_startonly_program(self) -> None:
-        """ Clear a previously set startonly program """
-        self.startonly_program = None
-
     def set_startonly_option(self, option_key:str, value) -> None:
         """ Set an option that will be used when starting the program """
         if not self.startonly_options:
