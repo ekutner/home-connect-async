@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 from asyncio import Task
-from enum import Enum, IntFlag
+from enum import Enum
 import inspect
 import logging
 import json
@@ -14,7 +14,7 @@ from dataclasses_json import Undefined, config, DataClassJsonMixin
 from aiohttp_sse_client.client import MessageEvent
 
 from .const import Events
-from .common import HomeConnectError, GlobalStatus, LogMode
+from .common import ConditionalLogger, HomeConnectError, GlobalStatus
 from .callback_registery import CallbackRegistry
 from .appliance import Appliance
 from .auth import AuthManager
@@ -62,8 +62,7 @@ class HomeConnect(DataClassJsonMixin):
         delayed_load:bool=False,
         refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
         auto_update:bool=False,
-        lang:str=None,
-        log_mode:LogMode=None) -> HomeConnect:
+        lang:str=None) -> HomeConnect:
         """ Factory for creating a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
 
         Parameters:
@@ -77,7 +76,7 @@ class HomeConnect(DataClassJsonMixin):
 
         If auto_update is set to False then subscribe_for_updates() should be called to receive real-time updates to the data
         """
-        api = HomeConnectApi(am, lang, log_mode)
+        api = HomeConnectApi(am, lang)
         hc:HomeConnect = None
         if json_data:
             try:
@@ -103,7 +102,6 @@ class HomeConnect(DataClassJsonMixin):
             hc.subscribe_for_updates()
 
         return hc
-
 
     def start_load_data_task(self,
         refresh:RefreshMode = None,

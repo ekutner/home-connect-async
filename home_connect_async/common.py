@@ -3,12 +3,38 @@
 import asyncio
 from datetime import datetime, timedelta
 from enum import IntFlag
+from logging import Logger
 
-class LogMode(IntFlag):
-    """ Enum to control special logging """
-    NONE = 0
-    REQUESTS = 1
-    RESPONSES = 2
+class ConditionalLogger:
+    """ Class for conditional logging based on the log mode """
+    class LogMode(IntFlag):
+        """ Enum to control special logging """
+        NONE = 0
+        VERBOSE = 1
+        REQUESTS = 2
+        RESPONSES = 4
+
+    _log_flags:LogMode = None
+
+    @classmethod
+    def mode(cls, log_flags:LogMode=None) -> LogMode:
+        """ Gets or Sets the log flags for conditional logging """
+        if log_flags:
+            cls._log_flags = log_flags
+        return cls._log_flags
+
+
+    @classmethod
+    def ismode(cls, logmode:LogMode) -> bool:
+        """ Check if the specified logmode is enabled """
+        return cls._log_flags & logmode
+
+    @classmethod
+    def debug(cls, logger:Logger, logmode:LogMode, *args, **kwargs ) -> None:
+        """ Conditional debug log """
+        if cls._log_flags & logmode:
+            logger.debug(*args, **kwargs)
+
 
 class HomeConnectError(Exception):
     """ Common exception class for the SDK """
