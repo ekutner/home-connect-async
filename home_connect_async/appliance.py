@@ -190,6 +190,12 @@ class Appliance():
         else:
             return None
 
+    def get_applied_program_option(self, option_key:str) -> Option|None:
+        prog = self.get_applied_program()
+        if prog and prog.options and option_key in prog.options:
+            return prog.options[option_key]
+        return None
+
     def get_applied_program_available_options(self) -> dict[Option]|None:
         """ gets the available options for the applied program """
         prog = self.get_applied_program()
@@ -244,34 +250,25 @@ class Appliance():
         self.selected_program = prog
         return prog
 
-    async def async_select_program(self, key:str=None, options:Sequence[dict]=None, program:Program=None):
+    async def async_select_program(self, program_key:str=None, options:Sequence[dict]=None):
         """ Set the selected program
 
         Parameters:
         key: The key of the program to select
         options: Additional program options to set
-        program: A Program object that represents the selected program. If used then "key" is ignored.
         """
 
-        if key is None and program is None:
-            _LOGGER.error('Either "program" or "key" must be specified')
-            raise HomeConnectError('Either "program" or "key" must be specified')
+        if  self.available_programs and program_key in self.available_programs:
+            program = self.available_programs[program_key]
+        else:
+            _LOGGER.error("The selected program key is not available")
+            raise HomeConnectError("The selected program key is not available")
 
-
-        if program is None:
-            if  self.available_programs and self.available_programs[key]:
-                program = self.available_programs[key]
-            else:
-                _LOGGER.error("The selected program key is not available")
-                raise HomeConnectError("The selected program key is not available")
-
-
-        key = program.key
         previous_program = self.startonly_program if self.startonly_program else self.selected_program
         if program.execution == 'startonly' and not self.active_program:
             self.startonly_program = program
             _LOGGER.debug("Setting startonly_program=%s", program.key)
-            if not previous_program or previous_program.key != key:
+            if not previous_program or previous_program.key != program_key:
                 await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
             return
         else:
@@ -279,10 +276,10 @@ class Appliance():
 
         async with Synchronization.selected_program_lock:
             if self.active_program:
-                res = await self._async_set_program(key, options, 'active')
+                res = await self._async_set_program(program_key, options, 'active')
             else:
-                res = await self._async_set_program(key, options, 'selected')
-            if res and (not previous_program or previous_program.key != key):
+                res = await self._async_set_program(program_key, options, 'selected')
+            if res and (not previous_program or previous_program.key != program_key):
                 # There is a race condition between this and the selected program event
                 # so check if it was alreayd update so we don't call twice
                 # Note that this can't be dropped because the new options notification may arrive before the
