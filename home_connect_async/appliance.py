@@ -269,7 +269,7 @@ class Appliance():
             self.startonly_program = program
             _LOGGER.debug("Setting startonly_program=%s", program.key)
             if not previous_program or previous_program.key != program_key:
-                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
+                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED, program_key)
             return
         else:
             self.startonly_program = None
@@ -291,7 +291,7 @@ class Appliance():
                     self.selected_program = await self._async_fetch_programs('selected')
                 #TODO: Consider if the above updates can be removed or if adding available_programs is required
                 self.available_programs = await self._async_fetch_programs('available')
-                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
+                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED, program_key)
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
 
@@ -510,7 +510,7 @@ class Appliance():
                     if value:
                         self.selected_program = await self._async_fetch_programs('selected')
                         self.available_programs = await self._async_fetch_programs('available')
-                        await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED)
+                        await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED, value)
                     else:
                         self.selected_program = None
                         self.available_programs = await self._async_fetch_programs('available')
@@ -526,17 +526,18 @@ class Appliance():
             self.active_program = await self._async_fetch_programs('active')
             self.available_programs = await self._async_fetch_programs('available')
             self.commands = await self._async_fetch_commands()
-            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED)
+            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, value)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif ( (key == 'BSH.Common.Root.ActiveProgram' and not value) or
                (key == 'BSH.Common.Status.OperationState' and value=='BSH.Common.EnumType.OperationState.Ready') or
                (key == 'BSH.Common.Event.ProgramFinished')
             ) and self.active_program:
             # handle program end
+            prev_prog = self.active_program.key if self.active_program else None
             self.active_program = None
             self.commands = await self._async_fetch_commands()
             self.available_programs = await self._async_fetch_programs('available')
-            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED)
+            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED, prev_prog)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key == 'BSH.Common.Status.OperationState' and \
              value!='BSH.Common.EnumType.OperationState.Run' and \
