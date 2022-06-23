@@ -158,6 +158,7 @@ class HomeConnect(DataClassJsonMixin):
                                 appliance = await Appliance.async_create(self, ha)
                                 self.appliances[haid] = appliance
                             await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], Events.PAIRED)
+                            await self._callbacks.async_broadcast_event(self.appliances[ha['haId']], Events.DATA_CHANGED)
                             _LOGGER.debug("Loadded appliance: %s", self.appliances[ha['haId']].name)
                         elif haid in self.appliances:
                             _LOGGER.warning("The appliance (%s) is disconnected when loading for the first time", haid)
