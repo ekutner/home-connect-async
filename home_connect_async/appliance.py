@@ -24,6 +24,7 @@ class Status():
     value:Optional[any] = None
     name:Optional[str] = None
     displayvalue:Optional[str] = None
+    unit:Optional[str] = None
 
     @classmethod
     def create(cls, data:dict):
@@ -32,7 +33,8 @@ class Status():
             key = data['key'],
             name = data.get('name'),
             value = data.get('value'),
-            displayvalue= data.get('displayvalue')
+            displayvalue= data.get('displayvalue'),
+            unit = data.get('unit')
         )
         return status
 
