@@ -252,7 +252,7 @@ class Appliance():
         self.selected_program = prog
         return prog
 
-    async def async_select_program(self, program_key:str=None, options:Sequence[dict]=None):
+    async def async_select_program(self, program_key:str=None, options:Sequence[dict]=None, validate:bool=True):
         """ Set the selected program
 
         Parameters:
@@ -262,19 +262,22 @@ class Appliance():
 
         if  self.available_programs and program_key in self.available_programs:
             program = self.available_programs[program_key]
-        else:
+        elif validate:
             _LOGGER.error("The selected program key is not available")
             raise HomeConnectError("The selected program key is not available")
+        else:
+            program = None
 
         previous_program = self.startonly_program if self.startonly_program else self.selected_program
-        if program.execution == 'startonly' and not self.active_program:
-            self.startonly_program = program
-            _LOGGER.debug("Setting startonly_program=%s", program.key)
-            if not previous_program or previous_program.key != program_key:
-                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED, program_key)
-            return
-        else:
-            self.startonly_program = None
+        if program:
+            if program.execution == 'startonly' and not self.active_program:
+                self.startonly_program = program
+                _LOGGER.debug("Setting startonly_program=%s", program.key)
+                if not previous_program or previous_program.key != program_key:
+                    await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED, program_key)
+                return
+            else:
+                self.startonly_program = None
 
         async with Synchronization.selected_program_lock:
             if self.active_program:
@@ -297,7 +300,7 @@ class Appliance():
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
 
-    async def async_start_program(self, program_key:str=None, options:Sequence[dict]=None, program:Program=None) -> bool:
+    async def async_start_program(self, program_key:str=None, options:Sequence[dict]=None, validate:bool=True) -> bool:
         """ Started the specified program
 
         Parameters:
@@ -305,8 +308,6 @@ class Appliance():
         options: Additional program options to set
         program: A Program object that represents the selected program. If used then "key" is ignored.
         """
-        if program is not None:
-            program_key = program.key
 
         if not program_key:
             if self.startonly_program:
@@ -314,10 +315,10 @@ class Appliance():
             elif self.selected_program:
                 program_key = self.selected_program.key
             else:
-                _LOGGER.error('Either "program" or "key" must be specified')
+                _LOGGER.error('"program_key" was not specified and there is no selected program to start')
                 raise HomeConnectError('Either "program" or "key" must be specified')
 
-        if not self.available_programs or program_key not in self.available_programs:
+        if validate and (not self.available_programs or program_key not in self.available_programs):
             _LOGGER.warning("The selected program in not one of the available programs (not supported by the API)")
             raise HomeConnectError("The specified program in not one of the available programs (not supported by the API)")
 
