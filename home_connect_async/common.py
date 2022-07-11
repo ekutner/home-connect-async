@@ -102,18 +102,28 @@ class GlobalStatus:
     def get_status_str(cls) -> str:
         """ Return the status as a formatted string"""
         if cls._blocked_until:
-            delta = (cls._blocked_until - datetime.now()).seconds
-            if delta < 60:
-                return f"Blocked for {delta}s"
-            else:
-                hours = delta //3600
-                minutes = (delta - hours*3600) // 60
-                return f"Blocked for {hours}:{minutes:02}h"
+            return f"Blocked for {cls.get_block_time_str()}"
         elif cls._status & cls.Status.LOADING_FAILED:
             return cls.Status.LOADING_FAILED.name
         else:
             return cls._status.name
 
+    @classmethod
+    def get_blocked_until(cls):
+        return cls._blocked_until
+
+    @classmethod
+    def get_block_time_str(cls):
+        if cls._blocked_until:
+            delta = (cls._blocked_until - datetime.now()).seconds
+            if delta < 60:
+                return f"{delta}s"
+            else:
+                hours = delta //3600
+                minutes = (delta - hours*3600) // 60
+                return f"{hours}:{minutes:02}h"
+        else:
+            return None
 
 
 
