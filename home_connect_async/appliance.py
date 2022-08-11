@@ -178,6 +178,7 @@ class Appliance():
     _homeconnect:Optional[homeconnect.HomeConnect] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, decoder=lambda val: None, exclude=lambda val: True))
     _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _callbacks:Optional[callback_registery.CallbackRegistry] = field(default_factory=lambda: None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _active_program_fail_count:Optional[int] = 0
 
 
     #region - Helper functions
@@ -524,6 +525,7 @@ class Appliance():
                         self.selected_program = None
                         #self.available_programs = await self._async_fetch_programs("available")
                     await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            self._active_program_fail_count = 0
         elif ( (key == "BSH.Common.Root.ActiveProgram" and value) or
                 # apparently it is possible to get progress notifications without getting the ActiveProgram event first so we handle that
                 (key in ["BSH.Common.Option.ProgramProgress", "BSH.Common.Option.RemainingProgramTime"]) or
@@ -537,6 +539,7 @@ class Appliance():
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, value)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            self._active_program_fail_count = 0
         elif ( (key == "BSH.Common.Root.ActiveProgram" and not value) or
                (key == "BSH.Common.Status.OperationState" and value in ["BSH.Common.EnumType.OperationState.Ready", "BSH.Common.EnumType.OperationState.Finished"]) or
                (key == "BSH.Common.Event.ProgramFinished")
@@ -548,6 +551,7 @@ class Appliance():
             self.available_programs = await self._async_fetch_programs("available")
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED, prev_prog)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            self._active_program_fail_count = 0
         elif key == "BSH.Common.Status.OperationState" and \
              value!="BSH.Common.EnumType.OperationState.Run" and \
              self.status.get("BSH.Common.Status.OperationState") != value:  # ignore repeat notifiations of the same state
@@ -561,6 +565,7 @@ class Appliance():
             self.available_programs = await self._async_fetch_programs("available")
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif ( not self.available_programs or len(self.available_programs) < 2) and \
+             ( self._active_program_fail_count < 5 ) and \
              ( key in ["BSH.Common.Status.OperationState", "BSH.Common.Status.RemoteControlActive"] ) and \
              ( "BSH.Common.Status.OperationState" not in self.status or self.status["BSH.Common.Status.OperationState"].value == "BSH.Common.EnumType.OperationState.Ready" ) and \
              ( "BSH.Common.Status.RemoteControlActive" not in self.status or self.status["BSH.Common.Status.RemoteControlActive"].value):
@@ -571,6 +576,10 @@ class Appliance():
                 self.available_programs = available_programs
                 await self._callbacks.async_broadcast_event(self, Events.PAIRED)
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+                self._active_program_fail_count = 0
+            else:
+                # This is a workaround to prevent rate limiting when receiving progress events but avaialable_programs returns 404
+                self._active_program_fail_count += 1
 
         # broadcast the specific event that was received
         await self._callbacks.async_broadcast_event(self, key, value)
