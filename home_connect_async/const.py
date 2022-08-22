@@ -1,3 +1,4 @@
+"""Constants for the Home-connect async library."""
 from enum import Enum
 
 SIM_HOST = "https://simulator.home-connect.com"
@@ -18,5 +19,3 @@ class Events(str,Enum):
     PROGRAM_STARTED = "PROGRAM_STARTED"
     PROGRAM_FINISHED = "PROGRAM_FINISHED"
     UNHANDLED = "UNHANDLED"
-
-
