@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dataclasses_json import Undefined, dataclass_json
-from .command import Command
-
 
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
