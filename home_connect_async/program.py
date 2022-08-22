@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 from .options import Option
 
+
 @dataclass_json
 @dataclass
 class Program:
@@ -15,7 +16,7 @@ class Program:
     name: str | None = None
     options: dict[str, Option] | None = None
     execution: str | None = None
-    active: bool | None= False
+    active: bool | None = False
 
     @classmethod
     def create(cls, data: dict):

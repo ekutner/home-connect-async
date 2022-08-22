@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from dataclasses_json import Undefined, dataclass_json
 
+
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class Command:

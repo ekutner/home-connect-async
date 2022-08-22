@@ -20,10 +20,10 @@ class Option:
     displayvalue: str | None = None
     min: int | None = None
     max: int | None = None
-    stepsize: int |None = None
+    stepsize: int | None = None
     allowedvalues: list[str] | None = None
     execution: str | None = None
-    liveupdate: bool |None = None
+    liveupdate: bool | None = None
     access: str | None = None
 
     @classmethod
