@@ -85,7 +85,7 @@ class GlobalStatus:
         BLOCKED = 16
 
     _status: Status = Status.INIT
-    _blocked_until: datetime = None
+    _blocked_until: datetime | None = None
 
     @classmethod
     def set_status(cls, status: Status, delay: int = None) -> None:

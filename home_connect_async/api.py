@@ -132,7 +132,7 @@ class HomeConnectApi:
                 if response.status == 429:  # Too Many Requests
                     wait_time = response.headers.get("Retry-After")
                     _LOGGER.debug(
-                        "HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry",
+                        "HTTP Error 429 - Too Many Requests. Will retry in %s seconds",
                         wait_time,
                     )
                     GlobalStatus.set_status(GlobalStatus.Status.BLOCKED, int(wait_time))

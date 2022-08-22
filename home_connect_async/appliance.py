@@ -198,7 +198,7 @@ class Appliance:
         options: Sequence[dict] = None,
         validate: bool = True,
     ) -> bool:
-        """Started the specified program
+        """Started the specified program.
 
         Parameters:
         key: The key of the program to select
@@ -706,7 +706,7 @@ class Appliance:
             )
             raise HomeConnectError(
                 "Unexpected exception in Appliance.async_fetch_data", inner_exception=ex
-            )
+            ) from ex
 
     async def _async_fetch_programs(self, program_type: str):
         """Fetch the different kinds of programs with their options from the cloud service."""
