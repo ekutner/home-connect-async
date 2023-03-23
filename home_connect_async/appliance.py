@@ -226,7 +226,7 @@ class Appliance():
 
     #endregion
 
-    #region - Manage Programs
+    #region - Control Appliance
     def set_startonly_option(self, option_key:str, value) -> None:
         """ Set an option that will be used when starting the program """
         if not self.startonly_options:
@@ -455,7 +455,9 @@ class Appliance():
             raise HomeConnectError(response.error_description, response=response)
         raise HomeConnectError("Failed to set program ({response.status})", response=response)
 
+    #endregion
 
+    
     async def async_set_connection_state(self, connected:bool):
         """ Update the appliance connection state when notified about a state change from the event stream """
         if connected != self.connected:
@@ -520,6 +522,7 @@ class Appliance():
                             self.available_programs[selected_key].options = await self._async_fetch_available_options(selected_key)
                         else:
                             _LOGGER.debug("Skipping fetch_available_options() for selected program")
+                        self.settings = await self._async_fetch_settings()
                         await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED, value)
                     else:
                         self.selected_program = None
@@ -536,6 +539,7 @@ class Appliance():
             # handle program start
             self.active_program = await self._async_fetch_programs("active")
             self.available_programs = await self._async_fetch_programs("available")
+            self.settings = await self._async_fetch_settings()
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, value)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
@@ -547,6 +551,7 @@ class Appliance():
             # handle program end
             prev_prog = self.active_program.key if self.active_program else None
             self.active_program = None
+            self.settings = await self._async_fetch_settings()
             self.commands = await self._async_fetch_commands()
             self.available_programs = await self._async_fetch_programs("available")
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED, prev_prog)
@@ -559,6 +564,7 @@ class Appliance():
             self.active_program = await self._async_fetch_programs("active")
             self.selected_program = await self._async_fetch_programs("selected")
             self.available_programs = await self._async_fetch_programs("available")
+            self.settings = await self._async_fetch_settings()
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         elif key =="BSH.Common.Status.RemoteControlStartAllowed":
