@@ -522,7 +522,9 @@ class Appliance():
                             self.available_programs[selected_key].options = await self._async_fetch_available_options(selected_key)
                         else:
                             _LOGGER.debug("Skipping fetch_available_options() for selected program")
-                        self.settings = await self._async_fetch_settings()
+
+                        # TODO: Trying to remove update of settings when the selected program is changed (2023-07-15)
+                        # self.settings = await self._async_fetch_settings()
                         await self._callbacks.async_broadcast_event(self, Events.PROGRAM_SELECTED, value)
                     else:
                         self.selected_program = None
