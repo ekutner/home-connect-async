@@ -49,11 +49,14 @@ class HomeConnect(DataClassJsonMixin):
     #     )
 
 
+    _disabled_appliances:Optional[list[str]] = field(default_factory=lambda: list() )
+
     # Internal fields - not serialized to JSON
     _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _updates_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _load_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _callbacks:Optional[CallbackRegistry] = field(default_factory=lambda: CallbackRegistry(), metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+
 
     @classmethod
     async def async_create(cls,
@@ -62,7 +65,9 @@ class HomeConnect(DataClassJsonMixin):
         delayed_load:bool=False,
         refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
         auto_update:bool=False,
-        lang:str=None) -> HomeConnect:
+        lang:str=None,
+        disabled_appliances:list[str] = []
+        ) -> HomeConnect:
         """ Factory for creating a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
 
         Parameters:
@@ -94,6 +99,7 @@ class HomeConnect(DataClassJsonMixin):
 
         hc._api = api
         hc._refresh_mode = refresh
+        hc._disabled_appliances = disabled_appliances
 
         if not delayed_load:
             await hc.async_load_data(refresh)
@@ -146,6 +152,9 @@ class HomeConnect(DataClassJsonMixin):
                 if 'homeappliances' in data:
                     for ha in data['homeappliances']:
                         haid = ha['haId']
+                        if  haid in self._disabled_appliances or haid.lower().replace('-','_') in self._disabled_appliances:
+                            continue
+
                         haid_list.append(haid)
                         if ha['connected']:
                             if haid in self.appliances:
@@ -302,7 +311,7 @@ class HomeConnect(DataClassJsonMixin):
     async def _async_process_updates(self, event:MessageEvent):
         """ Handle the different kinds of events received over the SSE channel """
         haid = event.last_event_id
-        if event.type == 'KEEP-ALIVE':
+        if event.type == 'KEEP-ALIVE' or haid.lower().replace('-','_') in self._disabled_appliances:
             self._last_update = datetime.now()
             return
         if haid not in self.appliances:
