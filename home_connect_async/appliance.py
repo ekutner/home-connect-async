@@ -552,8 +552,20 @@ class Appliance():
             await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, value)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
+        elif ( (key == "BSH.Common.Status.OperationState" and value in ["BSH.Common.EnumType.OperationState.Inactive"]) 
+            ) and self.active_program:
+            # handle powering off / standby
+            prev_prog = self.active_program.key if self.active_program else None
+            self.active_program = None
+            self.selected_program = None
+            self.settings = await self._async_fetch_settings()
+            self.commands = await self._async_fetch_commands()
+            self.available_programs = await self._async_fetch_programs("available")
+            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED, prev_prog)
+            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+
         elif ( (key == "BSH.Common.Root.ActiveProgram" and not value) or
-               (key == "BSH.Common.Status.OperationState" and value in ["BSH.Common.EnumType.OperationState.Ready", "BSH.Common.EnumType.OperationState.Finished"]) or
+               (key == "BSH.Common.Status.OperationState" and value in ["BSH.Common.EnumType.OperationState.Ready", "BSH.Common.EnumType.OperationState.Aborting", "BSH.Common.EnumType.OperationState.Finished"]) or
                (key == "BSH.Common.Event.ProgramFinished")
             ) and self.active_program:
             # handle program end
