@@ -12,7 +12,7 @@ from .appliance import Appliance
 _LOGGER = logging.getLogger(__name__)
 
 class CallbackRegistry():
-    """ Calss for managing callback registration and notifications """
+    """ Class for managing callback registration and notifications """
     WILDCARD_KEY = "WILDCARD"
 
     def __init__(self) -> None:
@@ -130,7 +130,7 @@ class CallbackRegistry():
 
 
     async def _async_call(self, callback:Callable, appliance:Appliance, event_key:str|Events, value:any) -> None:
-        """ Helper funtion to make the right kind of call to the callback funtion """
+        """ Helper function to make the right kind of call to the callback function """
         sig = inspect.signature(callback)
         param_count = len(sig.parameters)
         callback_error = False
