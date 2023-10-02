@@ -3,6 +3,7 @@ __pycache__
 *.egg-info
 
 .vscode
+.DS_Store
 *.code-workspace
 
 examples/*.txt
