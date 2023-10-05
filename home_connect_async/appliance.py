@@ -592,7 +592,9 @@ class Appliance():
         elif ( (key == "BSH.Common.Root.ActiveProgram" and not value) or
                (key == "BSH.Common.Status.OperationState" and value in ["BSH.Common.EnumType.OperationState.ActionRequired","BSH.Common.EnumType.OperationState.Aborting", "BSH.Common.EnumType.OperationState.Error","BSH.Common.EnumType.OperationState.Pause"]) or
                (key == "BSH.Common.Event.ProgramAborted")
-            ) and self.active_program:
+            ):
+            if not self.active_program:
+                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, self.active_program)
             # handle error conditions or requiring user actions
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED, value)
