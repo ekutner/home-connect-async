@@ -474,6 +474,7 @@ class Appliance():
         """ Update the appliance data model from a change event notification """
         key:str = data["key"]
         value = data["value"]
+        uri = data["uri"] if "uri" in data else ""
 
         if not self.connected:
             # an event was received for a disconnected appliance, which means we didn"t get the CONNECTED event, so reload the appliace data
@@ -486,16 +487,26 @@ class Appliance():
                 self.selected_program.options[key].value = value
                 self.selected_program.options[key].name = data.get("name")
                 self.selected_program.options[key].displayvalue = data.get("displayvalue")
+            elif "programs/selected" in uri:
+                _LOGGER.debug("Got event for unknown property: %s", data)
+                self.active_program = await self._async_fetch_programs("selected")
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+
             if self.active_program and self.active_program.options and key in self.active_program.options:
                 self.active_program.options[key].value = value
                 self.active_program.options[key].name = data.get("name")
                 self.active_program.options[key].displayvalue = data.get("displayvalue")
+            elif "programs/active" in uri:
+                _LOGGER.debug("Got event for unknown property: %s", data)
+                self.active_program = await self._async_fetch_programs("active")
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
             if key in self.status:
                 self.status[key].value = value
                 self.status[key].name = data.get("name")
                 self.status[key].displayvalue = data.get("displayvalue")
-            elif "uri" in data and "/status/" in data["uri"]:
+            elif "/status/" in uri:
+                _LOGGER.debug("Got event for unknown property: %s", data)
                 self.status = await self._async_fetch_status()
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
@@ -503,7 +514,8 @@ class Appliance():
                 self.settings[key].value = value
                 self.settings[key].name = data.get("name")
                 self.settings[key].displayvalue = data.get("displayvalue")
-            elif "uri" in data and "/settings/" in data["uri"]:
+            elif "/settings/" in uri:
+                _LOGGER.debug("Got event for unknown property: %s", data)
                 self.settings = await self._async_fetch_settings()
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
