@@ -69,8 +69,10 @@ class Option():
     max:Optional[int] = None
     stepsize:Optional[int] = None
     allowedvalues:Optional[list[str]] = None
+    displayallowedvalues:Optional[list[str]] = None
     execution:Optional[str] = None
     liveupdate:Optional[bool] = None
+    default:Optional[str] = None
     access:Optional[str] = None
 
     @classmethod
@@ -90,8 +92,10 @@ class Option():
             option.max = constraints.get('max')
             option.stepsize = constraints.get('stepsize')
             option.allowedvalues = constraints.get('allowedvalues')
+            option.displayallowedvalues = constraints.get('displayvalues')
             option.execution = constraints.get('execution')
             option.liveupdate = constraints.get('liveupdate')
+            option.default = constraints.get('default')
             option.access = constraints.get('access')
         return option
 
