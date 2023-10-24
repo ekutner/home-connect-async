@@ -510,9 +510,12 @@ class Appliance():
                         #self.available_programs = await self._async_fetch_programs("available")
                     await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
             self._active_program_fail_count = 0
-        elif ( (key == "BSH.Common.Root.ActiveProgram" and value) or
-                # apparently it is possible to get progress notifications without getting the ActiveProgram event first so we handle that
-                (key in ["BSH.Common.Option.ProgramProgress", "BSH.Common.Option.RemainingProgramTime"]) or
+            
+        elif (  # (key == "BSH.Common.Root.ActiveProgram" and value) or  # NOTE: It seems that the ActiveProgam event is received before the API returns the active program so let's try to ignore it and rely on the OperationState only
+                # Apparently it is possible to get progress notifications without getting the Run OperationState first so we handle that
+                # but we want to give the OperationState event a chance to be received so we wait until the second progress event before we handle it as an active program
+                (key == "BSH.Common.Option.RemainingProgramTime" and (not self.selected_program or key not in self.selected_program.options or value < self.selected_program.options[key].value)) or
+                (key == "BSH.Common.Option.ProgramProgress" and value>0 ) or
                 # it is also possible to get operation state Run without getting the ActiveProgram event
                 (key == "BSH.Common.Status.OperationState" and value in ["BSH.Common.EnumType.OperationState.Run", "BSH.Common.EnumType.OperationState.DelayedStart"])
             ) and \
@@ -522,15 +525,18 @@ class Appliance():
             self.active_program = await self._async_fetch_programs("active")
             if self.active_program:
                 self._active_program_fail_count = 0
+                self.available_programs = await self._async_fetch_programs("available")
+                self.commands = await self._async_fetch_commands()
+                await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, self.active_program.key)
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
             else:
                 # This is a workaround to prevent rate limiting when receiving progress events but active_program returns 404
                 self._active_program_fail_count += 1
-            self.available_programs = await self._async_fetch_programs("available")
-            if not self.settings:
-                self.settings = await self._async_fetch_settings()
-            self.commands = await self._async_fetch_commands()
-            await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, value)
-            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+                if self._active_program_fail_count == 3 :
+                    self.available_programs = await self._async_fetch_programs("available")
+                    self.commands = await self._async_fetch_commands()
+                    await self._callbacks.async_broadcast_event(self, Events.PROGRAM_STARTED, None)
+                    await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         elif ( (key == "BSH.Common.Root.ActiveProgram" and not value) or
                (key == "BSH.Common.Status.OperationState" and value == "BSH.Common.EnumType.OperationState.Finished") or
