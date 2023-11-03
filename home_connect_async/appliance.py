@@ -510,7 +510,7 @@ class Appliance():
                         #self.available_programs = await self._async_fetch_programs("available")
                     await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
             self._active_program_fail_count = 0
-            
+
         elif (  # (key == "BSH.Common.Root.ActiveProgram" and value) or  # NOTE: It seems that the ActiveProgam event is received before the API returns the active program so let's try to ignore it and rely on the OperationState only
                 # Apparently it is possible to get progress notifications without getting the Run OperationState first so we handle that
                 # but we want to give the OperationState event a chance to be received so we wait until the second progress event before we handle it as an active program
@@ -557,7 +557,7 @@ class Appliance():
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         elif key == "BSH.Common.Status.OperationState" and value == "BSH.Common.EnumType.OperationState.Ready" \
-             and self.status.get("BSH.Common.Status.OperationState", {"value": None}).value != value: # ignore repeating events
+             and ("BSH.Common.Status.OperationState" not in self.status or self.status["BSH.Common.Status.OperationState"].value != value): # ignore repeating events
             prev_prog = self.active_program.key if self.active_program else None
             self.active_program = None
             self._active_program_fail_count = 0
@@ -571,7 +571,7 @@ class Appliance():
                 await self._callbacks.async_broadcast_event(self, Events.PROGRAM_FINISHED, prev_prog)
 
         elif key == "BSH.Common.Status.OperationState" and value == "BSH.Common.EnumType.OperationState.Inactive" \
-             and self.status.get("BSH.Common.Status.OperationState", {"value": None}).value != value:
+             and ("BSH.Common.Status.OperationState" not in self.status or self.status["BSH.Common.Status.OperationState"].value != value):
             self.active_program = None
             self._active_program_fail_count = 0
             self.selected_program = None
@@ -580,12 +580,12 @@ class Appliance():
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         elif key == "BSH.Common.Status.OperationState" and value == "BSH.Common.EnumType.OperationState.Pause" \
-             and self.status.get("BSH.Common.Status.OperationState", {"value": None}).value != value:
+             and ("BSH.Common.Status.OperationState" not in self.status or self.status["BSH.Common.Status.OperationState"].value != value):
             self.commands = await self._async_fetch_commands()
 
         elif key == "BSH.Common.Status.OperationState" \
              and value in [ "BSH.Common.EnumType.OperationState.ActionRequired", "BSH.Common.EnumType.OperationState.Error", "BSH.Common.EnumType.OperationState.Aborting" ] \
-             and self.status.get("BSH.Common.Status.OperationState", {"value": None}).value != value:
+             and ("BSH.Common.Status.OperationState" not in self.status or self.status["BSH.Common.Status.OperationState"].value != value):
             _LOGGER.debug("The appliance entered and error operation state: %s", data)
 
         elif key =="BSH.Common.Status.RemoteControlStartAllowed":
@@ -610,7 +610,7 @@ class Appliance():
             self.selected_program.options[key].displayvalue = data.get("displayvalue")
         elif "programs/selected" in uri and key != "BSH.Common.Root.SelectedProgram":
             _LOGGER.debug("Got event for unknown property: %s", data)
-            self.active_program = await self._async_fetch_programs("selected")
+            self.selected_program = await self._async_fetch_programs("selected")
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         if self.active_program and self.active_program.options and key in self.active_program.options:
