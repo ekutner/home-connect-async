@@ -575,8 +575,18 @@ class Appliance():
             self.active_program = None
             self._active_program_fail_count = 0
             self.selected_program = None
-            self.available_programs = None
-            self.commands = {}
+            # It appears that there are appliances, like Hood that can be inactive, or even powered off,
+            # but still have available programs that can be started with a call to start_program.
+            # However, we only want to fetch the available program if we we're in a state that already fetched them
+            if "BSH.Common.Status.OperationState" not in self.status or self.status["BSH.Common.Status.OperationState"].value != "BSH.Common.EnumType.OperationState.Ready":
+                self.available_programs = await self._async_fetch_programs("available")
+
+            # Update the commands only if they weren't updated in the previous state
+            if "BSH.Common.Status.OperationState" not in self.status or \
+                self.status["BSH.Common.Status.OperationState"].value not in \
+                    ["BSH.Common.EnumType.OperationState.Finished", "BSH.Common.EnumType.OperationState.Ready"]:
+                self.commands = await self._async_fetch_commands()
+
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         elif key == "BSH.Common.Status.OperationState" and value == "BSH.Common.EnumType.OperationState.Pause" \
