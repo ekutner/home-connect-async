@@ -125,18 +125,18 @@ class HomeConnectApi():
         """ Implements a HTTP DELETE request """
         return await self._async_request('DELETE', endpoint)
 
-    async def async_get_event_stream(self, endpoint):
+    async def async_get_event_stream(self, endpoint:str, timeout:int):
         """ Returns a Server Sent Events (SSE) stream to be consumed by the caller """
-        return await self._auth.stream(endpoint, self._lang)
+        return await self._auth.stream(endpoint, self._lang, timeout)
 
 
-    async def async_stream(self, endpoint:str, event_handler:Callable[[str], None]):
+    async def async_stream(self, endpoint:str, timeout:int, event_handler:Callable[[str], None]):
         """ Implements a SSE consumer which calls the defined event handler on every new event"""
         backoff = 2
         event_source = None
         while True:
             try:
-                event_source = await self._auth.stream(endpoint, self._lang)
+                event_source = await self._auth.stream(endpoint, self._lang, timeout)
                 await event_source.connect()
                 async for event in event_source:
                     backoff = 1

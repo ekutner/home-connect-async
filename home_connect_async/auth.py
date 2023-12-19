@@ -48,7 +48,7 @@ class AbstractAuth(ABC):
             method, f"{self.host}{endpoint}", **kwargs, headers=headers,
         )
 
-    async def stream(self, endpoint:str, lang:str=None, **kwargs) -> sse_client.EventSource:
+    async def stream(self, endpoint:str, lang:str, sse_timeout:int, **kwargs) -> sse_client.EventSource:
         """ Initiate a SSE stream """
         headers = {}
         access_token = await self.async_get_access_token()
@@ -57,8 +57,8 @@ class AbstractAuth(ABC):
         if lang:
             headers['Accept-Language'] = lang
         #timeout = aiohttp.ClientTimeout(total = ( self._auth.access_token_expirs_at - datetime.now() ).total_seconds() )
-        timeout = aiohttp.ClientTimeout(total = 900 )
-        return sse_client.EventSource(f"{self.host}{endpoint}", session=self.websession, headers=headers, timeout=timeout, **kwargs)
+        sse_timeout = aiohttp.ClientTimeout(total = sse_timeout*60 )
+        return sse_client.EventSource(f"{self.host}{endpoint}", session=self.websession, headers=headers, timeout=sse_timeout, **kwargs)
 
 
 class AuthManager(AbstractAuth):

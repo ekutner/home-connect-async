@@ -56,7 +56,7 @@ class HomeConnect(DataClassJsonMixin):
     _updates_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _load_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _callbacks:Optional[CallbackRegistry] = field(default_factory=lambda: CallbackRegistry(), metadata=config(encoder=lambda val: None, exclude=lambda val: True))
-
+    _sse_timeout:Optional[int] = field(default=None)
 
     @classmethod
     async def async_create(cls,
@@ -66,7 +66,8 @@ class HomeConnect(DataClassJsonMixin):
         refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
         auto_update:bool=False,
         lang:str=None,
-        disabled_appliances:list[str] = []
+        disabled_appliances:list[str] = [],
+        sse_timeout:int=10
         ) -> HomeConnect:
         """ Factory for creating a HomeConnect object - DO NOT USE THE DEFAULT CONSTRUCTOR
 
@@ -100,6 +101,7 @@ class HomeConnect(DataClassJsonMixin):
         hc._api = api
         hc._refresh_mode = refresh
         hc._disabled_appliances = disabled_appliances
+        hc._sse_timeout = sse_timeout
 
         if not delayed_load:
             await hc.async_load_data(refresh)
@@ -253,7 +255,7 @@ class HomeConnect(DataClassJsonMixin):
         while True:
             try:
                 _LOGGER.debug("Connecting to SSE stream")
-                event_source = await self._api.async_get_event_stream('/api/homeappliances/events')
+                event_source = await self._api.async_get_event_stream('/api/homeappliances/events', self._sse_timeout)
                 await event_source.connect()
                 #self.status |= self.HomeConnectStatus.UPDATES
                 GlobalStatus.set_status(GlobalStatus.Status.UPDATES)
