@@ -130,58 +130,58 @@ class HomeConnectApi():
         return await self._auth.stream(endpoint, self._lang, timeout)
 
 
-    async def async_stream(self, endpoint:str, timeout:int, event_handler:Callable[[str], None]):
-        """ Implements a SSE consumer which calls the defined event handler on every new event"""
-        backoff = 2
-        event_source = None
-        while True:
-            try:
-                event_source = await self._auth.stream(endpoint, self._lang, timeout)
-                await event_source.connect()
-                async for event in event_source:
-                    backoff = 1
-                    try:
-                        await event_handler(event)
-                    except Exception as ex:
-                        _LOGGER.exception('Unhandled exception in stream event handler', exc_info=ex)
-            except asyncio.CancelledError:
-                break
-            except ConnectionRefusedError as ex:
-                _LOGGER.exception('ConnectionRefusedError in SSE connection refused. Will try again', exc_info=ex)
-            except ConnectionError as ex:
-                error_code = self.parse_sse_error(ex.args[0])
-                if error_code == 429:
-                    backoff *= 2
-                    if backoff > 3600: backoff = 3600
-                    elif backoff < 60: backoff = 60
-                    _LOGGER.info('Got error 429 when opening event stream connection, will sleep for %s seconds and retry', backoff)
-                else:
-                    _LOGGER.exception('ConnectionError in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
-                    backoff *= 2
-                    if backoff > 120: backoff = 120
+    # async def async_stream(self, endpoint:str, timeout:int, event_handler:Callable[[str], None]):
+    #     """ Implements a SSE consumer which calls the defined event handler on every new event"""
+    #     backoff = 2
+    #     event_source = None
+    #     while True:
+    #         try:
+    #             event_source = await self._auth.stream(endpoint, self._lang, timeout)
+    #             await event_source.connect()
+    #             async for event in event_source:
+    #                 backoff = 1
+    #                 try:
+    #                     await event_handler(event)
+    #                 except Exception as ex:
+    #                     _LOGGER.exception('Unhandled exception in stream event handler', exc_info=ex)
+    #         except asyncio.CancelledError:
+    #             break
+    #         except ConnectionRefusedError as ex:
+    #             _LOGGER.exception('ConnectionRefusedError in SSE connection refused. Will try again', exc_info=ex)
+    #         except ConnectionError as ex:
+    #             error_code = self.parse_sse_error(ex.args[0])
+    #             if error_code == 429:
+    #                 backoff *= 2
+    #                 if backoff > 3600: backoff = 3600
+    #                 elif backoff < 60: backoff = 60
+    #                 _LOGGER.info('Got error 429 when opening event stream connection, will sleep for %s seconds and retry', backoff)
+    #             else:
+    #                 _LOGGER.exception('ConnectionError in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
+    #                 backoff *= 2
+    #                 if backoff > 120: backoff = 120
 
-                await asyncio.sleep(backoff)
+    #             await asyncio.sleep(backoff)
 
-            except asyncio.TimeoutError:
-                # it is expected that the connection will time out every hour
-                _LOGGER.debug("The SSE connection timeout, will renew and retry")
-            except Exception as ex:
-                _LOGGER.exception('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
-                await asyncio.sleep(backoff)
-                backoff *= 2
-                if backoff > 120: backoff = 120
+    #         except asyncio.TimeoutError:
+    #             # it is expected that the connection will time out every hour
+    #             _LOGGER.debug("The SSE connection timeout, will renew and retry")
+    #         except Exception as ex:
+    #             _LOGGER.exception('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
+    #             await asyncio.sleep(backoff)
+    #             backoff *= 2
+    #             if backoff > 120: backoff = 120
 
-            finally:
-                if event_source:
-                    await event_source.close()
-                    event_source = None
+    #         finally:
+    #             if event_source:
+    #                 await event_source.close()
+    #                 event_source = None
 
 
-    def parse_sse_error(self, error:str) -> int:
-        """ Helper function to parse the error code from a SSE exception """
-        try:
-            parts = error.split(': ')
-            error_code = int(parts[-1])
-            return error_code
-        except:
-            return 0
+    # def parse_sse_error(self, error:str) -> int:
+    #     """ Helper function to parse the error code from a SSE exception """
+    #     try:
+    #         parts = error.split(': ')
+    #         error_code = int(parts[-1])
+    #         return error_code
+    #     except:
+    #         return 0
