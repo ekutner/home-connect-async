@@ -14,7 +14,7 @@ from dataclasses_json import Undefined, config, DataClassJsonMixin
 from aiohttp_sse_client.client import MessageEvent
 
 from .const import Events
-from .common import ConditionalLogger, HomeConnectError, GlobalStatus
+from .common import ConditionalLogger, HomeConnectError, HealthStatus
 from .callback_registery import CallbackRegistry
 from .appliance import Appliance
 from .auth import AuthManager
@@ -55,6 +55,7 @@ class HomeConnect(DataClassJsonMixin):
     _api:Optional[HomeConnectApi] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _updates_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _load_task:Optional[Task] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
+    _health:Optional[HealthStatus] = field(default=None, metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _callbacks:Optional[CallbackRegistry] = field(default_factory=lambda: CallbackRegistry(), metadata=config(encoder=lambda val: None, exclude=lambda val: True))
     _sse_timeout:Optional[int] = field(default=None)
 
@@ -82,7 +83,8 @@ class HomeConnect(DataClassJsonMixin):
 
         If auto_update is set to False then subscribe_for_updates() should be called to receive real-time updates to the data
         """
-        api = HomeConnectApi(am, lang)
+        health = HealthStatus()
+        api = HomeConnectApi(am, lang, health)
         hc:HomeConnect = None
         if json_data:
             try:
@@ -99,6 +101,7 @@ class HomeConnect(DataClassJsonMixin):
             hc = HomeConnect()
 
         hc._api = api
+        hc._health = health
         hc._refresh_mode = refresh
         hc._disabled_appliances = disabled_appliances
         hc._sse_timeout = sse_timeout
@@ -135,8 +138,8 @@ class HomeConnect(DataClassJsonMixin):
     ) -> None:
         """ Loads or just refreshes the data model from the cloud service """
         #self.status |= self.HomeConnectStatus.LOADING
-        GlobalStatus.set_status(GlobalStatus.Status.RUNNING)
-        GlobalStatus.unset_status(GlobalStatus.Status.LOADING_FAILED)
+        self._health.set_status(self._health.Status.RUNNING)
+        self._health.unset_status(self._health.Status.LOADING_FAILED)
 
         try:
             if refresh == self.RefreshMode.NOTHING:
@@ -182,11 +185,11 @@ class HomeConnect(DataClassJsonMixin):
                         del self.appliances[haId]
 
             #self.status |= self.HomeConnectStatus.LOADED
-            GlobalStatus.set_status(GlobalStatus.Status.LOADED)
+            self._health.set_status(self._health.Status.LOADED)
         except Exception as ex:
             _LOGGER.warning("Failed to load data from Home Connect (%s)", str(ex), exc_info=ex)
             #self.status = self.HomeConnectStatus.LOADING_FAILED
-            GlobalStatus.set_status(GlobalStatus.Status.LOADING_FAILED)
+            self._health.set_status(self._health.Status.LOADING_FAILED)
             if on_error:
                 if inspect.iscoroutinefunction(on_error):
                     await on_error(self, ex)
@@ -235,6 +238,10 @@ class HomeConnect(DataClassJsonMixin):
         """ Supports simple access to an appliance based on its haId """
         return self.appliances.get(haId)
 
+    @property
+    def health(self):
+        return self._health
+
 
     #region - Event stream and updates
 
@@ -258,7 +265,7 @@ class HomeConnect(DataClassJsonMixin):
                 event_source = await self._api.async_get_event_stream('/api/homeappliances/events', self._sse_timeout)
                 await event_source.connect()
                 #self.status |= self.HomeConnectStatus.UPDATES
-                GlobalStatus.set_status(GlobalStatus.Status.UPDATES)
+                self._health.set_status(self._health.Status.UPDATES)
 
                 async for event in event_source:
                     _LOGGER.debug("Received event from SSE stream: %s", str(event))
@@ -271,11 +278,11 @@ class HomeConnect(DataClassJsonMixin):
                 break
             except ConnectionRefusedError as ex:
                 #self.status &= self.HomeConnectStatus.NOUPDATES
-                GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
+                self._health.unset_status(self._health.Status.UPDATES)
                 _LOGGER.debug('ConnectionRefusedError in SSE connection refused. Will try again', exc_info=ex)
             except ConnectionError as ex:
                 #self.status &= self.HomeConnectStatus.NOUPDATES
-                GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
+                self._health.unset_status(self._health.Status.UPDATES)
                 error_code = parse_sse_error(ex.args[0])
                 if error_code == 429:
                     backoff *= 2
@@ -294,7 +301,7 @@ class HomeConnect(DataClassJsonMixin):
                 _LOGGER.debug("The SSE connection timeed-out, will renew and retry")
             except Exception as ex:
                 #self.status &= self.HomeConnectStatus.NOUPDATES
-                GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
+                self._health.unset_status(self._health.Status.UPDATES)
                 _LOGGER.debug('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
                 await asyncio.sleep(backoff)
                 backoff *= 2
@@ -306,7 +313,7 @@ class HomeConnect(DataClassJsonMixin):
                     event_source = None
 
         #self.status &= self.HomeConnectStatus.NOUPDATES
-        GlobalStatus.unset_status(GlobalStatus.Status.UPDATES)
+        self._health.unset_status(self._health.Status.UPDATES)
         _LOGGER.debug("Exiting SSE event stream")
 
 

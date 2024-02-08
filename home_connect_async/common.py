@@ -17,22 +17,22 @@ class ConditionalLogger:
     _log_flags:LogMode = None
 
     @classmethod
-    def mode(cls, log_flags:LogMode=None) -> LogMode:
+    def mode(self, log_flags:LogMode=None) -> LogMode:
         """ Gets or Sets the log flags for conditional logging """
         if log_flags:
-            cls._log_flags = log_flags
-        return cls._log_flags
+            self._log_flags = log_flags
+        return self._log_flags
 
 
     @classmethod
-    def ismode(cls, logmode:LogMode) -> bool:
+    def ismode(self, logmode:LogMode) -> bool:
         """ Check if the specified logmode is enabled """
-        return cls._log_flags & logmode
+        return self._log_flags & logmode
 
     @classmethod
-    def debug(cls, logger:Logger, logmode:LogMode, *args, **kwargs ) -> None:
+    def debug(self, logger:Logger, logmode:LogMode, *args, **kwargs ) -> None:
         """ Conditional debug log """
-        if cls._log_flags & logmode:
+        if self._log_flags & logmode:
             logger.debug(*args, **kwargs)
 
 
@@ -59,8 +59,8 @@ class Synchronization():
     selected_program_lock = asyncio.Lock()
 
 
-class GlobalStatus:
-    """ Store a global status for the library """
+class HealthStatus:
+    """ Store the Home Connect connection health status """
     class Status(IntFlag):
         """ Enum for the current status of the Home Connect data loading process """
         INIT = 0
@@ -72,50 +72,45 @@ class GlobalStatus:
         LOADING_FAILED = 8
         BLOCKED = 16
 
-    _status:Status = Status.INIT
-    _blocked_until:datetime = None
+    def __init__(self) -> None:
+        self._status:self.Status = self.Status.INIT
+        self._blocked_until:datetime = None
 
-    @classmethod
-    def set_status(cls, status:Status, delay:int=None) -> None:
+    def set_status(self, status:Status, delay:int=None) -> None:
         """ Set the status """
-        cls._status |= status
+        self._status |= status
         if delay:
-            cls._blocked_until = datetime.now() + timedelta(seconds=delay)
+            self._blocked_until = datetime.now() + timedelta(seconds=delay)
 
-    @classmethod
-    def unset_status(cls, status:Status) -> None:
+    def unset_status(self, status:Status) -> None:
         """ Set the status """
-        cls._status &= ~status
-        if status == cls.Status.BLOCKED:
-            cls._blocked_until = None
+        self._status &= ~status
+        if status == self.Status.BLOCKED:
+            self._blocked_until = None
 
-    @classmethod
-    def get_status(cls) -> Status:
+    def get_status(self) -> Status:
         """ Get the status """
-        if cls._status & cls.Status.BLOCKED:
-            return cls.Status.BLOCKED
-        elif cls._status & cls.Status.LOADING_FAILED:
-            return cls.Status.LOADING_FAILED
-        return cls._status
+        if self._status & self.Status.BLOCKED:
+            return self.Status.BLOCKED
+        elif self._status & self.Status.LOADING_FAILED:
+            return self.Status.LOADING_FAILED
+        return self._status
 
-    @classmethod
-    def get_status_str(cls) -> str:
+    def get_status_str(self) -> str:
         """ Return the status as a formatted string"""
-        if cls._blocked_until:
-            return f"Blocked for {cls.get_block_time_str()}"
-        elif cls._status & cls.Status.LOADING_FAILED:
-            return cls.Status.LOADING_FAILED.name
+        if self._blocked_until:
+            return f"Blocked for {self.get_block_time_str()}"
+        elif self._status & self.Status.LOADING_FAILED:
+            return self.Status.LOADING_FAILED.name
         else:
-            return cls._status.name
+            return self._status.name
 
-    @classmethod
-    def get_blocked_until(cls):
-        return cls._blocked_until
+    def get_blocked_until(self):
+        return self._blocked_until
 
-    @classmethod
-    def get_block_time_str(cls):
-        if cls._blocked_until:
-            delta = (cls._blocked_until - datetime.now()).seconds
+    def get_block_time_str(self):
+        if self._blocked_until:
+            delta = (self._blocked_until - datetime.now()).seconds
             if delta < 60:
                 return f"{delta}s"
             else:

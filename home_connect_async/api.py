@@ -6,7 +6,7 @@ from collections.abc import Callable
 from aiohttp import ClientResponse
 
 from .auth import AbstractAuth
-from .common import ConditionalLogger, HomeConnectError, GlobalStatus
+from .common import ConditionalLogger, HomeConnectError, HealthStatus
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,9 +43,10 @@ class HomeConnectApi():
             return None
 
 
-    def __init__(self, auth:AbstractAuth, lang:str=None):
+    def __init__(self, auth:AbstractAuth, lang:str, health:HealthStatus):
         self._auth = auth
         self._lang = lang
+        self._health = health
         self._call_counter = 0
 
     async def _async_request(self, method:str, endpoint:str, data=None) -> ApiResponse:
@@ -84,9 +85,9 @@ class HomeConnectApi():
                 if response.status == 429:    # Too Many Requests
                     wait_time = response.headers.get('Retry-After')
                     _LOGGER.debug('HTTP Error 429 - Too Many Requests. Sleeping for %s seconds and will retry', wait_time)
-                    GlobalStatus.set_status(GlobalStatus.Status.BLOCKED, int(wait_time))
+                    self._health.set_status(self._health.Status.BLOCKED, int(wait_time))
                     await asyncio.sleep(int(wait_time)+1)
-                    GlobalStatus.unset_status(GlobalStatus.Status.BLOCKED)
+                    self._health.unset_status(self._health.Status.BLOCKED)
                 elif method in ["PUT", "DELETE"] and response.status == 204:
                     result = self.ApiResponse(response, None)
                     return result
