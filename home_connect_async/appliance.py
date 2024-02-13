@@ -233,6 +233,7 @@ class Appliance():
     #region - Control Appliance
     def set_startonly_option(self, option_key:str, value) -> None:
         """ Set an option that will be used when starting the program """
+        _LOGGER.debug("Setting startonly option %s to: %s", option_key, str(value))
         if not self.startonly_options:
             self.startonly_options = {}
         if option_key not in self.startonly_options:
@@ -243,6 +244,7 @@ class Appliance():
     def clear_startonly_option(self, option_key:str) -> None:
         """ Clear a previously set startonly option """
         if self.startonly_options and option_key in self.startonly_options:
+            _LOGGER.debug("Clearing startonly option %s", option_key)
             del self.startonly_options[option_key]
 
     async def async_get_active_program(self):
