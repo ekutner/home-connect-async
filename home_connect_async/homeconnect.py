@@ -274,7 +274,8 @@ class HomeConnect(DataClassJsonMixin):
                         await self._async_process_updates(event)
                     except Exception as ex:
                         _LOGGER.debug('Unhandled exception in stream event handler', exc_info=ex)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as ex:
+                _LOGGER.debug('Got asyncio.CancelledError exception. Home Assistant is probably closing so aborting SSE loop', exc_info=ex)
                 break
             except ConnectionRefusedError as ex:
                 #self.status &= self.HomeConnectStatus.NOUPDATES
@@ -301,8 +302,8 @@ class HomeConnect(DataClassJsonMixin):
                 _LOGGER.debug("The SSE connection timeed-out, will renew and retry")
             except Exception as ex:
                 #self.status &= self.HomeConnectStatus.NOUPDATES
-                self._health.unset_status(self._health.Status.UPDATES)
                 _LOGGER.debug('Exception in SSE event stream. Will wait for %d seconds and retry ', backoff, exc_info=ex)
+                self._health.unset_status(self._health.Status.UPDATES)
                 await asyncio.sleep(backoff)
                 backoff *= 2
                 if backoff > 120: backoff = 120
