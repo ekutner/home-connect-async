@@ -605,25 +605,23 @@ class Appliance():
             self.commands = await self._async_fetch_commands()
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
-        # elif ( not self.available_programs or len(self.available_programs) < 2) and \
-        #      ( key in ["BSH.Common.Status.OperationState", "BSH.Common.Status.RemoteControlActive"] ) and \
-        #      ( "BSH.Common.Status.OperationState" not in self.status or self.status["BSH.Common.Status.OperationState"].value == "BSH.Common.EnumType.OperationState.Ready" ) and \
-        #      ( "BSH.Common.Status.RemoteControlActive" not in self.status or self.status["BSH.Common.Status.RemoteControlActive"].value):
-        #     # Handle cases were the appliance data was loaded without getting all the programs (for example when HA is restarted while a program is active)
-        #     # If the state is Ready and remote control is possible and we didn't load the available programs before then load them now
-        #     available_programs = await self._async_fetch_programs("available")
-        #     self.available_programs = available_programs
-        #     await self._callbacks.async_broadcast_event(self, Events.PAIRED)
-        #     await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+
 
         if self.selected_program and self.selected_program.options and key in self.selected_program.options:
             self.selected_program.options[key].value = value
             self.selected_program.options[key].name = data.get("name")
             self.selected_program.options[key].displayvalue = data.get("displayvalue")
         elif "programs/selected" in uri and key != "BSH.Common.Root.SelectedProgram":
-            _LOGGER.debug("Got event for unknown property: %s", data)
-            self.selected_program = await self._async_fetch_programs("selected")
-            await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
+            if not self.selected_program and \
+               self.active_program and self.active_program.options and key in self.active_program.options:
+                # This is a workaround for a HC bug where an event is reporting an option for the selected program
+                # instead of the active program but there is no selected program available
+                _LOGGER.debug("There is no select program, updating the active program instead with option: %s", data)
+                self.active_program.options[key].value = value
+            else:
+                _LOGGER.debug("Got event for unknown option: %s", data)
+                self.selected_program = await self._async_fetch_programs("selected")
+                await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         if self.active_program and self.active_program.options and key in self.active_program.options:
             self.active_program.options[key].value = value
