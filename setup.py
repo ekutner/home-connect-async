@@ -1,9 +1,9 @@
-from distutils.core import setup
+from setuptools import setup
 
 setup(
     name = 'home-connect-async',
     packages = ['home_connect_async'],
-    version = '0.8.0',
+    version = '0.8.1',
     license='MIT',
     description = 'Async SDK for BSH Home Connect API',
     author = 'Eran Kutner',
