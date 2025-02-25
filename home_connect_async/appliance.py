@@ -633,7 +633,15 @@ class Appliance():
                and self.active_program
              ):
             _LOGGER.debug("Got event for unknown property: %s", data)
+            # Issue #471 shows BSH.Common.Option.ProgramProgress events being received but the option itself is
+            # not received when loading the active program. This causes the _async_fetch_programs() function to be
+            # called every 60 seconds but the entity is never added
+            # As a workaround we check if the options was retrieved and if not add it manually
             self.active_program = await self._async_fetch_programs("active")
+            if self.active_program and self.active_program.options and key not in self.active_program.options:
+                _LOGGER.debug("Manually adding option %s because it wasn't received from the API", key)
+                o = Option.create(data)
+                self.active_program.options[key] = o
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         if key in self.status:
