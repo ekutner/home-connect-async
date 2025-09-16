@@ -186,6 +186,11 @@ class Appliance():
 
 
     #region - Helper functions
+    @property
+    def normalized_haId(self) -> str:
+        """ Get the normalized version of the haId that is used as the unique identifier in Home Assistant """
+        return self.haId.lower().replace('-','_')
+
     def get_applied_program(self) -> Program|None:
         """ gets the currently applied program which is the active or startonly or selected program """
         if self.active_program:
