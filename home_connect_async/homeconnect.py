@@ -256,6 +256,8 @@ class HomeConnect(DataClassJsonMixin):
             except:
                 return 0
 
+        sse_logger = logging.getLogger("aiohttp_sse_client.client")
+        sse_logger.propagate = False
 
         backoff = 2
         event_source = None
@@ -326,7 +328,7 @@ class HomeConnect(DataClassJsonMixin):
             return
         if haid not in self.appliances:
             # handle cases where the appliance wasn't loaded before
-            _LOGGER.debug("Unknown haId '%s' reloading HomeConnected from the API", haid)
+            _LOGGER.debug("Unknown haId '%s' reloading HomeConnect from the API", haid)
             await self.async_load_data()
         if event.type == 'PAIRED':
             self.appliances[haid] = await Appliance.async_create(self, haId=haid)
@@ -351,7 +353,7 @@ class HomeConnect(DataClassJsonMixin):
             data = json.loads(event.data)
             haid = data['haId']
             if haid not in self.appliances:
-                _LOGGER.debug("Unknown haId '%s' reloading HomeConnected from the API", haid)
+                _LOGGER.debug("Unknown haId '%s' reloading HomeConnect from the API", haid)
                 await self.async_load_data()
             if 'items' in data:
                 for item in data['items']:
