@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name = 'home-connect-async',
     packages = ['home_connect_async'],
-    version = '0.8.3',
+    version = '0.8.4',
     license='MIT',
     description = 'Async SDK for BSH Home Connect API',
     author = 'Eran Kutner',
@@ -23,7 +23,8 @@ setup(
         'Topic :: Software Development :: Build Tools',
         'License :: OSI Approved :: MIT License',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.9',
-        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
+        'Programming Language :: Python :: 3.14',
     ],
 )
