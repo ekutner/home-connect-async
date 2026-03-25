@@ -172,10 +172,10 @@ class Appliance():
     available_programs:Optional[dict[str,Program]] = None
     active_program:Optional[Program] = None
     selected_program:Optional[Program] = None
-    status:dict[str, Status] = None
-    settings:dict[str, Option] = None
-    commands:dict[str, Command] = None
-    startonly_options:dict[str, Option] = None
+    status:dict[str, Status]|None = None
+    settings:dict[str, Option]|None = None
+    commands:dict[str, Command]|None = None
+    startonly_options:dict[str, Option]|None = None
     startonly_program:Optional[Program] = None
 
     # Internal fields
@@ -338,7 +338,7 @@ class Appliance():
             options = []
             if self.selected_program and self.available_programs and not self.startonly_program:
                 for opt in self.selected_program.options.values():
-                    if opt.key in self.available_programs[program_key].options and (not self.startonly_options or opt.key not in self.startonly_options):
+                    if self.available_programs[program_key].options and opt.key in self.available_programs[program_key].options and (not self.startonly_options or opt.key not in self.startonly_options):
                         option = { "key": opt.key, "value": opt.value}
                         options.append(option)
             if self.startonly_options:
