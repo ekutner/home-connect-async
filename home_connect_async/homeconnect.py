@@ -158,6 +158,7 @@ class HomeConnect(DataClassJsonMixin):
                     for ha in data['homeappliances']:
                         haid = ha['haId']
                         if  haid in self._disabled_appliances or haid.lower().replace('-','_') in self._disabled_appliances:
+                            _LOGGER.info("Skipping disabled appliance '%s'", ha['haId'])
                             continue
 
                         haid_list.append(haid)
