@@ -611,7 +611,6 @@ class Appliance():
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
 
-
         if self.selected_program and self.selected_program.options and key in self.selected_program.options:
             self.selected_program.options[key].value = value
             self.selected_program.options[key].name = data.get("name")
@@ -626,6 +625,10 @@ class Appliance():
             else:
                 _LOGGER.debug("Got event for unknown option: %s", data)
                 self.selected_program = await self._async_fetch_programs("selected")
+                if self.selected_program and self.selected_program.options and key not in self.selected_program.options:
+                    _LOGGER.debug("Manually adding option %s to selected_program because it wasn't received from the API", key)
+                    o = Option.create(data)
+                    self.selected_program.options[key] = o
                 await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         if self.active_program and self.active_program.options and key in self.active_program.options:
@@ -644,7 +647,7 @@ class Appliance():
             # As a workaround we check if the options was retrieved and if not add it manually
             self.active_program = await self._async_fetch_programs("active")
             if self.active_program and self.active_program.options and key not in self.active_program.options:
-                _LOGGER.debug("Manually adding option %s because it wasn't received from the API", key)
+                _LOGGER.debug("Manually adding option %s to active_program because it wasn't received from the API", key)
                 o = Option.create(data)
                 self.active_program.options[key] = o
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
@@ -656,6 +659,9 @@ class Appliance():
         elif "/status/" in uri:
             _LOGGER.debug("Got event for unknown property: %s", data)
             self.status = await self._async_fetch_status()
+            if self.status is not None and key not in self.status:
+                _LOGGER.debug("Manually adding status %s because it wasn't received from the API", key)
+                self.status[key] = Status.create(data)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
         if key in self.settings:
@@ -665,6 +671,9 @@ class Appliance():
         elif "/settings/" in uri:
             _LOGGER.debug("Got event for unknown property: %s", data)
             self.settings = await self._async_fetch_settings()
+            if self.settings is not None and key not in self.settings:
+                _LOGGER.debug("Manually adding setting %s because it wasn't received from the API", key)
+                self.settings[key] = Option.create(data)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
         # broadcast the specific event that was received
         await self._callbacks.async_broadcast_event(self, key, value)
