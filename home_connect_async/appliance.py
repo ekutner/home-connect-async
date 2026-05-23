@@ -72,7 +72,14 @@ class Option():
     allowedvaluesdisplay:Optional[list[str]] = None
     execution:Optional[str] = None
     liveupdate:Optional[bool] = None
-    default:Optional[str] = None
+    # Annotated `any` (matching `value` above) so dataclass_json won't coerce
+    # the deserialized value to str. The Home Connect API legitimately
+    # returns int / bool / str defaults depending on the option's `type`
+    # (e.g. `BSH.Common.Option.StartInRelative` has `default: 0`, an int);
+    # with `Optional[str]` here the int round-tripped through to_json /
+    # from_json came back as the string "0", silently corrupting cached
+    # config on every load.
+    default:Optional[any] = None
     access:Optional[str] = None
 
     @classmethod
