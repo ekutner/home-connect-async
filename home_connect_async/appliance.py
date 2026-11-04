@@ -412,15 +412,27 @@ class Appliance():
 
     async def _async_set_service_value(self, service_type:str, key:str, value:any) -> bool:
         """ Helper function to set key/value type service properties """
+        # The local copy of the value being written and the object holding its allowed values
+        target:Option|None = None
+        constraints:Option|None = None
         if service_type in ['settings', 'commands']:
             endpoint = f'{self._base_endpoint}/{service_type}/{key}'
+            if service_type == 'settings' and self.settings:
+                target = constraints = self.settings.get(key)
         elif service_type == 'options':
             if self.active_program:
                 endpoint = f'{self._base_endpoint}/programs/active/options/{key}'
+                program = self.active_program
             elif self.selected_program:
                 endpoint = f'{self._base_endpoint}/programs/selected/options/{key}'
+                program = self.selected_program
             else:
                 raise ValueError("No active/selected program to apply the options to")
+            if program.options:
+                target = program.options.get(key)
+            available = self.available_programs.get(program.key) if self.available_programs else None
+            if available and available.options:
+                constraints = available.options.get(key)
         else:
             raise ValueError(f"Unsupported service_type value: '{service_type}'")
 
@@ -433,10 +445,27 @@ class Appliance():
         jscmd = json.dumps(command, indent=2)
         response = await self._api.async_put(endpoint, jscmd)
         if response.status == 204:
+            if target is not None:
+                await self._async_apply_written_value(target, constraints, key, value)
             return True
         elif response.error_description:
             raise HomeConnectError(response.error_description, response=response)
         raise HomeConnectError("Failed to set service value ({response.status})", response=response)
+
+    async def _async_apply_written_value(self, target:Option, constraints:Option|None, key:str, value:any) -> None:
+        """ Reflect a value that the API accepted in the local data model right away
+
+        The appliance confirms a change with an event on the SSE stream, which can take seconds to arrive
+        and be processed. Updating the model as soon as the write succeeds lets consumers show the new state
+        immediately; the confirming event later overwrites it with the value reported by the appliance.
+        """
+        target.value = value
+        target.displayvalue = None
+        if constraints and constraints.allowedvalues and constraints.allowedvaluesdisplay and value in constraints.allowedvalues:
+            idx = constraints.allowedvalues.index(value)
+            if idx < len(constraints.allowedvaluesdisplay):
+                target.displayvalue = constraints.allowedvaluesdisplay[idx]
+        await self._callbacks.async_broadcast_event(self, key, value)
 
     async def _async_set_program(self, key, options:Sequence[dict], mode:str) -> bool:
         """ Main function to handle all scenarions of setting a program """
