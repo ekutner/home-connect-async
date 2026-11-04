@@ -229,6 +229,8 @@ class HomeConnect(DataClassJsonMixin):
             self._updates_task.cancel()
             self._updates_task = None
 
+        self._cancel_event_workers()
+
         self.clear_all_callbacks()
 
         for appliance in self.appliances.values():
@@ -271,12 +273,9 @@ class HomeConnect(DataClassJsonMixin):
                 self._health.set_status(self._health.Status.UPDATES)
 
                 async for event in event_source:
-                    _LOGGER.debug("Received event from SSE stream: %s", str(event))
+                    _LOGGER.debug("Received event from SSE stream: %s", event)
                     backoff = 1
-                    try:
-                        await self._async_process_updates(event)
-                    except Exception as ex:
-                        _LOGGER.debug('Unhandled exception in stream event handler', exc_info=ex)
+                    self._enqueue_event(event)
             except asyncio.CancelledError as ex:
                 _LOGGER.debug('Got asyncio.CancelledError exception. Home Assistant is probably closing so aborting SSE loop', exc_info=ex)
                 break
@@ -362,6 +361,49 @@ class HomeConnect(DataClassJsonMixin):
                     if haid in self.appliances:
                         appliance = self.appliances[haid]
                         await appliance.async_update_data(item)
+
+
+    def _enqueue_event(self, event:MessageEvent) -> None:
+        """ Hand an SSE event to the worker of its appliance
+
+        Handling an event can require several API calls. Doing that inside the stream loop stalled every
+        appliance's events behind them, so each appliance gets its own worker, which keeps that
+        appliance's events in the order they were received.
+        """
+        if event.type == 'KEEP-ALIVE':
+            self._last_update = datetime.now()
+            return
+        if not hasattr(self, '_event_workers'):
+            self._event_workers:dict[str, tuple[asyncio.Queue, Task]] = {}
+        haid = event.last_event_id
+        worker = self._event_workers.get(haid)
+        if worker is None or worker[1].done():
+            queue = asyncio.Queue()
+            task = asyncio.create_task(self._async_event_worker(queue), name=f"HomeConnect events {haid}")
+            worker = self._event_workers[haid] = (queue, task)
+        worker[0].put_nowait(event)
+
+    async def _async_event_worker(self, queue:asyncio.Queue) -> None:
+        """ Process the events of one appliance one at a time """
+        while True:
+            event = await queue.get()
+            try:
+                if event.last_event_id in self.appliances:
+                    await self._async_process_updates(event)
+                else:
+                    # An event for an unknown appliance reloads all the appliances, so handle those one at a time
+                    if not hasattr(self, '_unknown_appliance_lock'):
+                        self._unknown_appliance_lock = asyncio.Lock()
+                    async with self._unknown_appliance_lock:
+                        await self._async_process_updates(event)
+            except Exception as ex:
+                _LOGGER.debug('Unhandled exception in stream event handler', exc_info=ex)
+
+    def _cancel_event_workers(self) -> None:
+        """ Stop the per-appliance event workers """
+        for _, task in getattr(self, '_event_workers', {}).values():
+            task.cancel()
+        self._event_workers = {}
 
 
     # def _get_haId_from_event(self, event:dict):
