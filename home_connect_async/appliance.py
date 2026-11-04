@@ -16,6 +16,9 @@ from .common import HomeConnectError, Synchronization
 
 _LOGGER = logging.getLogger(__name__)
 
+# Upper bound on concurrent per-item detail requests (settings, program options) issued for one appliance
+MAX_CONCURRENT_DETAIL_REQUESTS = 4
+
 @dataclass_json(undefined=Undefined.EXCLUDE)
 @dataclass
 class Status():
@@ -746,11 +749,15 @@ class Appliance():
         try:
             _LOGGER.debug("Starting to load appliance data for %s (%s)", self.name, self.haId)
 
-            self.selected_program = await self._async_fetch_programs('selected')
-            self.active_program = await self._async_fetch_programs('active')
-            self.settings = await self._async_fetch_settings(refresh_only=not include_static_data)
-            self.status = await self._async_fetch_status()
-            self.commands = await self._async_fetch_commands()
+            # These requests are independent of each other, so run them concurrently
+            self.selected_program, self.active_program, self.settings, self.status, self.commands = await asyncio.gather(
+                self._async_fetch_programs('selected'),
+                self._async_fetch_programs('active'),
+                self._async_fetch_settings(refresh_only=not include_static_data),
+                self._async_fetch_status(),
+                self._async_fetch_commands(),
+            )
+            # The available programs fetch loads options for the current program, so it needs the results above
             self.available_programs = await self._async_fetch_programs('available')
             # if include_static_data or not self.available_programs:
             #     if  (
@@ -802,18 +809,22 @@ class Appliance():
             # When fetching selected and active programs the parent program node doesn't exist so we force it
             data = { 'programs': [ data ] }
 
+        needs_options = []
         for p in data['programs']:
             prog = Program.create(p)
             if 'options' in p:
-                options = self.optionlist_to_dict(p['options'])
-                _LOGGER.debug("Loaded %d Options for %s/%s", len(options), program_type, prog.key)
+                prog.options = self.optionlist_to_dict(p['options'])
+                _LOGGER.debug("Loaded %d Options for %s/%s", len(prog.options), program_type, prog.key)
             elif program_type=='available' and (prog.key == current_program_key or prog.execution == 'startonly'):
-                options = await self._async_fetch_available_options(prog.key)
+                needs_options.append(prog)
             else:
-                options = None
-            prog.options = options
+                prog.options = None
 
             programs[p['key']] = prog
+
+        results = await self._async_gather_limited(self._async_fetch_available_options(prog.key) for prog in needs_options)
+        for prog, options in zip(needs_options, results):
+            prog.options = options
 
 
         if program_type in ['selected', 'active'] and len(programs)==1:
@@ -878,8 +889,7 @@ class Appliance():
             return {}
 
         known = self.settings if refresh_only and self.settings else {}
-        settings = {}
-        fetched = 0
+        entries:list[tuple[str, Option|None]] = []
         for setting in data['settings']:
             existing = known.get(setting['key'])
             if existing is not None:
@@ -890,16 +900,31 @@ class Appliance():
                 existing.value = setting.get('value')
                 if 'name' in setting:
                     existing.name = setting['name']
-                settings[setting['key']] = existing
-                continue
-            endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
-            response = await self._api.async_get(endpoint)
-            fetched += 1
-            if response.status != 200:
-                continue
-            settings[setting['key']] = Option.create(response.data)
-        _LOGGER.debug("Loaded %d Settings (%d fetched in detail)", len(settings), fetched)
+            entries.append((setting['key'], existing))
+
+        to_fetch = [key for key, existing in entries if existing is None]
+        responses = await self._async_gather_limited(self._api.async_get(f'{self._base_endpoint}/settings/{key}') for key in to_fetch)
+        fetched = { key: Option.create(response.data) for key, response in zip(to_fetch, responses) if response.status == 200 }
+
+        # keep the order of the settings list
+        settings = {}
+        for key, existing in entries:
+            if existing is not None:
+                settings[key] = existing
+            elif key in fetched:
+                settings[key] = fetched[key]
+        _LOGGER.debug("Loaded %d Settings (%d fetched in detail)", len(settings), len(to_fetch))
         return settings
+
+    async def _async_gather_limited(self, coros) -> list:
+        """ Run the coroutines concurrently, with at most MAX_CONCURRENT_DETAIL_REQUESTS in flight, and return their results in order """
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DETAIL_REQUESTS)
+
+        async def limited(coro):
+            async with semaphore:
+                return await coro
+
+        return await asyncio.gather(*(limited(coro) for coro in coros))
 
 
     async def _async_fetch_commands(self):
