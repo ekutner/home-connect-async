@@ -496,7 +496,7 @@ class Appliance():
 
         if not self.connected:
             # an event was received for a disconnected appliance, which means we didn"t get the CONNECTED event, so reload the appliace data
-            await self.async_fetch_data()
+            await self.async_fetch_data(include_static_data=False)
             await self._callbacks.async_broadcast_event(self, Events.PAIRED)
             await self._callbacks.async_broadcast_event(self, Events.DATA_CHANGED)
 
@@ -677,7 +677,7 @@ class Appliance():
             self.settings[key].displayvalue = data.get("displayvalue")
         elif "/settings/" in uri:
             _LOGGER.debug("Got event for unknown property: %s", data)
-            self.settings = await self._async_fetch_settings()
+            self.settings = await self._async_fetch_settings(refresh_only=True)
             if self.settings is not None and key not in self.settings:
                 _LOGGER.debug("Manually adding setting %s because it wasn't received from the API", key)
                 self.settings[key] = Option.create(data)
@@ -748,7 +748,7 @@ class Appliance():
 
             self.selected_program = await self._async_fetch_programs('selected')
             self.active_program = await self._async_fetch_programs('active')
-            self.settings = await self._async_fetch_settings()
+            self.settings = await self._async_fetch_settings(refresh_only=not include_static_data)
             self.status = await self._async_fetch_status()
             self.commands = await self._async_fetch_commands()
             self.available_programs = await self._async_fetch_programs('available')
@@ -860,8 +860,13 @@ class Appliance():
         return statuses
 
 
-    async def _async_fetch_settings(self):
-        """ Fetch the appliance settings """
+    async def _async_fetch_settings(self, refresh_only:bool=False):
+        """ Fetch the appliance settings
+
+        The settings list only carries the current values, so the constraints (allowed values, min/max, access)
+        require one extra call per setting. With refresh_only, settings that are already known keep their
+        constraints and only get their values updated from the list; the extra call is made just for new settings.
+        """
         endpoint = f'{self._base_endpoint}/settings'
         response = await self._api.async_get(endpoint)
         if response.error_key:
@@ -872,14 +877,28 @@ class Appliance():
             _LOGGER.debug("Didn't get any data for Settings")
             return {}
 
+        known = self.settings if refresh_only and self.settings else {}
         settings = {}
+        fetched = 0
         for setting in data['settings']:
+            existing = known.get(setting['key'])
+            if existing is not None:
+                if 'displayvalue' in setting:
+                    existing.displayvalue = setting['displayvalue']
+                elif setting.get('value') != existing.value:
+                    existing.displayvalue = None
+                existing.value = setting.get('value')
+                if 'name' in setting:
+                    existing.name = setting['name']
+                settings[setting['key']] = existing
+                continue
             endpoint = f'{self._base_endpoint}/settings/{setting["key"]}'
             response = await self._api.async_get(endpoint)
+            fetched += 1
             if response.status != 200:
                 continue
             settings[setting['key']] = Option.create(response.data)
-        _LOGGER.debug("Loaded %d Settings", len(settings))
+        _LOGGER.debug("Loaded %d Settings (%d fetched in detail)", len(settings), fetched)
         return settings
 
 
