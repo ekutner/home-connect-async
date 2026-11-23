@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from enum import Enum
 
 SIM_HOST = "https://simulator.home-connect.com"
@@ -18,5 +19,8 @@ class Events(str,Enum):
     PROGRAM_STARTED = "PROGRAM_STARTED"
     PROGRAM_FINISHED = "PROGRAM_FINISHED"
     UNHANDLED = "UNHANDLED"
+
+# Callbacks receive (appliance, key, value) or any prefix of these, and may be coroutine functions
+EventCallback = Callable[..., Awaitable[None] | None]
 
 

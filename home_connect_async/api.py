@@ -43,7 +43,7 @@ class HomeConnectApi():
             return None
 
 
-    def __init__(self, auth:AbstractAuth, lang:str, health:HealthStatus):
+    def __init__(self, auth:AbstractAuth, lang:str|None, health:HealthStatus):
         self._auth = auth
         self._lang = lang
         self._health = health

@@ -27,7 +27,7 @@ class AbstractAuth(ABC):
     async def async_get_access_token(self) -> str:
         """Return a valid access token."""
 
-    async def request(self, method, endpoint:str, lang:str=None, **kwargs) -> ClientResponse:
+    async def request(self, method, endpoint:str, lang:str|None=None, **kwargs) -> ClientResponse:
         """Make a request."""
         headers = kwargs.get("headers")
 
@@ -48,7 +48,7 @@ class AbstractAuth(ABC):
             method, f"{self.host}{endpoint}", **kwargs, headers=headers,
         )
 
-    async def stream(self, endpoint:str, lang:str, sse_timeout:int, **kwargs) -> sse_client.EventSource:
+    async def stream(self, endpoint:str, lang:str|None, sse_timeout:int, **kwargs) -> sse_client.EventSource:
         """ Initiate a SSE stream """
         headers = {}
         access_token = await self.async_get_access_token()

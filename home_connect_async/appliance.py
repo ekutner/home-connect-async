@@ -5,12 +5,12 @@ import logging
 from collections.abc import Sequence, Callable
 from dataclasses import dataclass, field
 import re
-from typing import Optional
+from typing import Any, Optional
 from dataclasses_json import dataclass_json, Undefined, config
 from home_connect_async.api import HomeConnectApi
 import home_connect_async.homeconnect as homeconnect
 import home_connect_async.callback_registery as callback_registery
-from .const import Events
+from .const import Events, EventCallback
 from .common import HomeConnectError, Synchronization
 
 
@@ -21,7 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 class Status():
     """ Class to represent a Home Connect Status """
     key:str
-    value:Optional[any] = None
+    value:Any = None
     name:Optional[str] = None
     displayvalue:Optional[str] = None
     unit:Optional[str] = None
@@ -60,7 +60,7 @@ class Command():
 class Option():
     """ Class to represent a Home Connect Option """
     key:str
-    value:Optional[any] = None
+    value:Any = None
     type:Optional[str] = None
     name:Optional[str] = None
     unit:Optional[str] = None
@@ -79,7 +79,7 @@ class Option():
     # with `Optional[str]` here the int round-tripped through to_json /
     # from_json came back as the string "0", silently corrupting cached
     # config on every load.
-    default:Optional[any] = None
+    default:Any = None
     access:Optional[str] = None
 
     @classmethod
@@ -179,9 +179,9 @@ class Appliance():
     available_programs:Optional[dict[str,Program]] = None
     active_program:Optional[Program] = None
     selected_program:Optional[Program] = None
-    status:dict[str, Status]|None = None
-    settings:dict[str, Option]|None = None
-    commands:dict[str, Command]|None = None
+    status:dict[str, Status] = field(default_factory=dict)
+    settings:dict[str, Option] = field(default_factory=dict)
+    commands:dict[str, Command] = field(default_factory=dict)
     startonly_options:dict[str, Option]|None = None
     startonly_program:Optional[Program] = None
 
@@ -714,7 +714,7 @@ class Appliance():
         # broadcast the specific event that was received
         await self._callbacks.async_broadcast_event(self, key, value)
 
-    def register_callback(self, callback:Callable[[Appliance, str, any], None], keys:str|Sequence[str] ) -> None:
+    def register_callback(self, callback:EventCallback, keys:str|Sequence[str] ) -> None:
         """ Register a callback to be called when an update is received for the specified keys
             Wildcard syntax is also supported for the keys
 
@@ -724,7 +724,7 @@ class Appliance():
         """
         self._callbacks.register_callback(callback, keys, self)
 
-    def deregister_callback(self, callback:Callable[[], None], keys:str|Sequence[str]) -> None:
+    def deregister_callback(self, callback:EventCallback, keys:str|Sequence[str]) -> None:
         """ Clear a callback that was prevesiously registered so it stops getting notifications """
         self._callbacks.deregister_callback(callback, keys, self)
 

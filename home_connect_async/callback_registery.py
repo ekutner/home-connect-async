@@ -6,7 +6,7 @@ import re
 from typing import Callable
 from collections.abc import Sequence
 
-from .const import Events
+from .const import Events, EventCallback
 from .appliance import Appliance
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,9 +20,9 @@ class CallbackRegistry():
 
 
     def register_callback(self,
-        callback:Callable[[Appliance, str, any], None] | Callable[[Appliance, str], None] | Callable[[Appliance], None] | Callable[[], None],
+        callback:EventCallback,
         keys:str|Events|Sequence[str|Events],
-        appliance:Appliance|str = None
+        appliance:Appliance|str|None = None
     ):
         """ Register callback for change event notifications
 
@@ -59,9 +59,9 @@ class CallbackRegistry():
                 self._callbacks[haid][key].add(callback)
 
     def deregister_callback(self,
-        callback:Callable[[Appliance, str, any], None] | Callable[[Appliance, str], None] | Callable[[Appliance], None] | Callable[[], None],
+        callback:EventCallback,
         keys:str|Events|Sequence[str|Events],
-        appliance:Appliance|str = None
+        appliance:Appliance|str|None = None
     ):
         """ Clear a callback that was prevesiously registered so it stops getting notifications """
 

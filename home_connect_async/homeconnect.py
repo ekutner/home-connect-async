@@ -7,17 +7,17 @@ import logging
 import json
 from typing import ClassVar, Optional, Sequence
 from datetime import datetime
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from dataclasses_json import Undefined, config, DataClassJsonMixin
 
 from aiohttp_sse_client.client import MessageEvent
 
-from .const import Events
+from .const import Events, EventCallback
 from .common import ConditionalLogger, HomeConnectError, HealthStatus
 from .callback_registery import CallbackRegistry
 from .appliance import Appliance
-from .auth import AuthManager
+from .auth import AbstractAuth
 from .api import HomeConnectApi
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,12 +61,12 @@ class HomeConnect(DataClassJsonMixin):
 
     @classmethod
     async def async_create(cls,
-        am:AuthManager,
-        json_data:str=None,
+        am:AbstractAuth,
+        json_data:str|None=None,
         delayed_load:bool=False,
         refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
         auto_update:bool=False,
-        lang:str=None,
+        lang:str|None=None,
         disabled_appliances:list[str] = [],
         sse_timeout:int=10
         ) -> HomeConnect:
@@ -116,8 +116,8 @@ class HomeConnect(DataClassJsonMixin):
 
     def start_load_data_task(self,
         refresh:RefreshMode = None,
-        on_complete:Callable[[HomeConnect], None] = None,
-        on_error:Callable[[HomeConnect, Exception], None] = None
+        on_complete:Callable[[HomeConnect], Awaitable[None] | None] | None = None,
+        on_error:Callable[[HomeConnect, Exception], Awaitable[None] | None] | None = None
     ) -> asyncio.Task:
         """Complete the loading of the data when using delayed load
 
@@ -133,8 +133,8 @@ class HomeConnect(DataClassJsonMixin):
 
     async def async_load_data(self,
         refresh:RefreshMode=RefreshMode.DYNAMIC_ONLY,
-        on_complete:Callable[[HomeConnect], None] = None,
-        on_error:Callable[[HomeConnect, Exception], None] = None
+        on_complete:Callable[[HomeConnect], Awaitable[None] | None] | None = None,
+        on_error:Callable[[HomeConnect, Exception], Awaitable[None] | None] | None = None
     ) -> None:
         """ Loads or just refreshes the data model from the cloud service """
         #self.status |= self.HomeConnectStatus.LOADING
@@ -376,7 +376,7 @@ class HomeConnect(DataClassJsonMixin):
     #     return haId
 
 
-    def register_callback(self, callback:Callable[[Appliance, str], None] | Callable[[Appliance, str, any], None], keys:str|Sequence[str], appliance:Appliance|str = None):
+    def register_callback(self, callback:EventCallback, keys:str|Events|Sequence[str|Events], appliance:Appliance|str|None = None):
         """ Register callback for change event notifications
 
         Use the Appliance.register_callback() to register for appliance data update events
